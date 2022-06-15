@@ -9,10 +9,10 @@ Richter transformation (RT) is a paradigmatic evolution of chronic lymphocytic l
 
 ## Datasets
 
-- Mutational signatures: 
-- DNA methylation: Code used to normalize DNA methylation data can be found [here](https://github.com/Duran-FerrerM/DNAmeth_arrays). Code to calculate the tumor cell content, CLL epitypes, and epiCMIT can be found [here](https://github.com/Duran-FerrerM/Pan-B-cell-methylome).
-- ATAC-seq:
-- H3K27ac:
-- Bulk RNA-seq: All scripts and input files to reproduce our bulk RNA-seq analyses can be found in the [bulkRNA-seq folder](https://github.com/ferrannadeu/RichterTransformation/tree/main/bulkRNA-seq)
-- Single-cell RNA-seq: All scripts, notebooks and reports to reproduce the scRNA-seq analyses can be found [here](https://github.com/massonix/richter_transformation).
+- **Mutational signatures:** 
+- **DNA methylation:** Code used to normalize DNA methylation data can be found [here](https://github.com/Duran-FerrerM/DNAmeth_arrays). Code to calculate the tumor cell content, CLL epitypes, and epiCMIT can be found [here](https://github.com/Duran-FerrerM/Pan-B-cell-methylome).
+- **ATAC-seq:**
+- **H3K27ac:**
+- **Bulk RNA-seq:** R script and input files to reproduce our bulk RNA-seq analyses can be found [here](https://github.com/ferrannadeu/RichterTransformation/tree/main/bulkRNA-seq)
+- **Single-cell RNA-seq:** All scripts, notebooks and reports to reproduce the scRNA-seq analyses can be found [here](https://github.com/massonix/richter_transformation).
 
