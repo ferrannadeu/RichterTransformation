@@ -1,0 +1,69 @@
+CASE	GROUP	IGHV	TIME_POINT	DIAGNOSIS	TISSUE	IS_SECOND_TISSUE	DISEASE_STAGE	WGS_WES	WGS_WES_SAMPLE	WGS_WES_LIBRARY	WGS_WES_SEQUENCER	WGS_WES_MEAN_COVERAGE	WGS_PURITY	WGS_PLOIDY	EPIC_ARRAY	ATACseq	H3K27ac	RNAseq	scDNAseq	scRNAseq
+839	DX	U-IGHV	Germline	Germline	PB	no	NA	WGS	839-03-1ND	TruSeq DNA PCR-Free	HiSeq X Ten	38,417	100	NA	no	no	no	no	no	no
+839	DX	U-IGHV	T1-BM	CLL	BM	no	pretreatment	WGS	839-01-1TD	TruSeq DNA PCR-Free	HiSeq X Ten	28,614	99	2,04	yes	no	no	no	no	no
+839	DX	U-IGHV	T1-LN	RT-DLBCL	LN	no	RT	WGS	839-04-01BD	TruSeq DNA PCR-Free	HiSeq X Ten	35,404	60	2,1	yes	no	no	no	no	no
+4690	DX	M-IGHV	T1-PB	CLL	PB	no	pretreatment	WGS	4690-02-01TD	TruSeq DNA PCR-Free	NovaSeq 6000	37,389	NA	NA	no	no	no	no	no	no
+4690	DX	M-IGHV	T1-LN	RT-DLBCL	LN	no	RT	WGS	4690-03-01BD	TruSeq DNA PCR-Free	NovaSeq 6000	30,512	NA	NA	no	no	no	no	no	no
+4676	DX	U-IGHV	T1-LN	RT-DLBCL	LN	no	RT	WGS	4676-02-01BD	TruSeq DNA Nano	NovaSeq 6000	39,359	NA	NA	yes	no	no	no	no	no
+1563	CIT	U-IGHV	Germline	Germline	PB	no	NA	WGS	1563-01-01ND	TruSeq DNA PCR-Free	NovaSeq 6000	40,287	98,5	NA	no	no	no	no	no	no
+1563	CIT	U-IGHV	T1-PB	CLL	PB	no	posttreatment	WGS	1563-01-03TD	TruSeq DNA PCR-Free	NovaSeq 6000	37,588	94	2,05	yes	no	no	no	no	no
+1563	CIT	U-IGHV	T1-LN	RT-DLBCL	LN	no	RT	WGS	1563-02-01BD	TruSeq DNA PCR-Free	NovaSeq 6000	38,962	92	2	yes	no	no	no	no	no
+4675	CIT	U-IGHV	Germline	Germline	PB	no	NA	WGS	4675-01-01ND	TruSeq DNA Nano	NovaSeq 6000	33,692	99	NA	no	no	no	no	no	no
+4675	CIT	U-IGHV	Germline_donor	Germline_donor	PB	no	NA	WGS	4675-05-01ND	TruSeq DNA Nano	NovaSeq 6000	26,833	100	NA	no	no	no	no	no	no
+4675	CIT	U-IGHV	T1	CLL	LN	no	posttreatment	WGS	4675-03-01BD	TruSeq DNA Nano	NovaSeq 6000	37,636	88	1,93	no	no	no	no	no	no
+4675	CIT	U-IGHV	T2	RT-DLBCL	LN	no	RT	WGS	4675-04-01BD	TruSeq DNA Nano	NovaSeq 6000	37,017	88	1,9	no	no	no	no	no	no
+102	CIT	U-IGHV	T1	CLL	PB	no	pretreatment	WGS	102-01-01TD	TruSeq DNA Nano	NovaSeq 6000	40,749	NA	NA	no	no	no	no	no	no
+102	CIT	U-IGHV	T2	RT-DLBCL	PB	no	RT	WGS	102-0202-1DVT	TruSeq DNA Nano	NovaSeq 6000	33,826	NA	NA	no	no	no	no	no	no
+835	CIT	U-IGHV	T1	CLL	PB	no	posttreatment	WGS	835-02-03TD	TruSeq DNA Nano	NovaSeq 6000	32,316	NA	NA	no	no	no	no	no	no
+835	CIT	U-IGHV	T1	RT-DLBCL	LN	no	RT	WGS	835-01-02BD	TruSeq DNA Nano	NovaSeq 6000	30,676	NA	NA	no	no	no	no	no	no
+4686	CIT	U-IGHV	T1	CLL	PB	no	pretreatment	WGS	4686-02-01TD	TruSeq DNA Nano	NovaSeq 6000	42,135	NA	NA	no	no	no	no	no	no
+4686	CIT	U-IGHV	T2	RT-DLBCL	LN	no	RT	WGS	4686-03-01BD	TruSeq DNA Nano	NovaSeq 6000	29,966	NA	NA	no	no	no	no	no	no
+4687	CIT	M-IGHV	T1	CLL	PB	no	pretreatment	WGS	4687-02-01TD	TruSeq DNA Nano	NovaSeq 6000	33,129	NA	NA	no	no	no	no	no	no
+4687	CIT	M-IGHV	T2	RT-DLBCL	LN	no	RT	WGS	4687-03-01BD	TruSeq DNA Nano	NovaSeq 6000	42,248	NA	NA	no	no	no	no	no	no
+63	TargetedTherapies	U-IGHV	Germline	Germline	PB	no	NA	WGS	063-0126-02ND	Puente et al Nature 2015	Puente et al Nature 2015	30,279	99	NA	no	no	no	no	no	no
+63	TargetedTherapies	U-IGHV	T1-PB	CLL	PB	no	pretreatment	WGS	063-0127-01TD	Puente et al Nature 2015	Puente et al Nature 2015	31,555	97	2	no	no	no	no	no	yes
+63	TargetedTherapies	U-IGHV	T1-LN	CLL	LN	yes	pretreatment_2ndTissue	WGS	063-09-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	35,129	92	2	no	yes	yes	yes	no	yes
+63	TargetedTherapies	U-IGHV	T2	CLL	PB	no	posttreatment	WGS	063-02-1TD	Kapa Library Preparation	HiSeq 4000	28,234	97	2	no	yes	yes	no	no	yes
+63	TargetedTherapies	U-IGHV	T3	RT-DLBCL	LN	no	RT	WGS	063-08-04BD	Kapa Library Preparation	HiSeq 2000	31,626	93	2,3	no	yes	yes	yes	no	yes
+365	TargetedTherapies	M-IGHV	Germline	Germline	PB	no	NA	WGS	365-01-01ND	Kapa Library Preparation	HiSeq 4000	33,004	100	NA	no	no	no	no	no	no
+365	TargetedTherapies	M-IGHV	T1	CLL	PB	no	pretreatment	WGS	365-1951-01TD	Kapa Library Preparation	HiSeq 2000	31,563	99	2	yes	yes	yes	yes	no	no
+365	TargetedTherapies	M-IGHV	T2	CLL	PB	no	posttreatment	WGS	365-16-01TD	TruSeq DNA Nano	HiSeq X Ten	26,601	65	2,02	no	yes	yes	no	yes	yes
+365	TargetedTherapies	M-IGHV	T3	RT-DLBCL	LN	no	RT	WGS	365-11-01BD	Kapa Library Preparation	HiSeq 2000	32,597	82	1,99	yes	yes	yes	yes	yes	yes
+12	TargetedTherapies	U-IGHV	Germline	Germline	PB	no	NA	WGS	012-0034-01ND	Puente et al Nature 2015	Puente et al Nature 2015	25,33	99,5	NA	no	no	no	no	no	no
+12	TargetedTherapies	U-IGHV	T1	CLL	PB	no	pretreatment	WGS	012-13-01TD	Kapa Library Preparation	HiSeq 4000	27,84	95	2	no	no	no	no	yes	yes
+12	TargetedTherapies	U-IGHV	T2	CLL	PB	no	pretreatment_progression	WGS	012-02-1TD	Puente et al Nature 2015	Puente et al Nature 2015	26,593	93	2	yes	yes	yes	yes	yes	yes
+12	TargetedTherapies	U-IGHV	T3	CLL	PB	no	posttreatment	WGS	012-11-01TD	Kapa Library Preparation	HiSeq 4000	29,59	92	2	no	yes	yes	no	no	no
+12	TargetedTherapies	U-IGHV	T4	CLL	PB	no	posttreatment_2	WGS	012-16-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	37,443	80	2,01	yes	yes	yes	no	yes	yes
+12	TargetedTherapies	U-IGHV	T5-PB	CLL	PB	no	posttreatment_3	WGS	012-17-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	26,732	57	1,96	yes	no	no	no	yes	yes
+12	TargetedTherapies	U-IGHV	T5-BM	CLL	BM	yes	posttreatment_3_2ndTissue	WGS	012-18-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	36,75	90	1,96	no	no	no	no	no	no
+12	TargetedTherapies	U-IGHV	T6-PB	RT-DLBCL	PB	no	RT	WGS	012-19-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	26,172	94	1,96	yes	yes	yes	yes	yes	yes
+12	TargetedTherapies	U-IGHV	T6-BM	RT-DLBCL	BM	yes	RT_2ndTissue	WGS	012-15-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	27,896	86	1,96	no	no	no	no	no	no
+19	TargetedTherapies	M-IGHV	Germline	Germline	PB	no	NA	WGS	019-0048-01ND	Puente et al Nature 2015	Puente et al Nature 2015	34,488	99,9	no	no	no	no	no	no	no
+19	TargetedTherapies	M-IGHV	T1	CLL	PB	no	pretreatment	WGS	019-05-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	34,609	70	2	no	no	no	no	yes	yes
+19	TargetedTherapies	M-IGHV	T2	CLL	PB	no	pretreatment_progression	WGS	019-0047-01TD	Puente et al Nature 2015	Puente et al Nature 2015	24,445	99	2	yes	no	no	yes	no	no
+19	TargetedTherapies	M-IGHV	T3	CLL	PB	no	posttreatment	WGS	019-18-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	29,931	93	2	no	yes	yes	no	yes	yes
+19	TargetedTherapies	M-IGHV	T4	CLL	PB	no	posttreatment_2	WGS	019-19-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	34,127	89	2	no	no	no	no	yes	yes
+19	TargetedTherapies	M-IGHV	T5	CLL	PB	no	posttreatment_3	WGS	019-12-02TD	TruSeq DNA PCR-Free	HiSeq X Ten	32,168	92	2	yes	yes	yes	no	yes	yes
+19	TargetedTherapies	M-IGHV	T6	RT-DLBCL	PB	no	RT	WGS	019-15-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	38,838	97	2	yes	yes	yes	yes	yes	yes
+816	TargetedTherapies	U-IGHV	Germline	Germline	PB	no	NA	WGS	816-05-02ND	TruSeq DNA PCR-Free	HiSeq X Ten	36,478	97	NA	no	no	no	no	no	no
+816	TargetedTherapies	U-IGHV	T1	CLL	PB	no	pretreatment	WGS	816-01-1TD	TruSeq DNA PCR-Free	HiSeq X Ten	28,324	80	2,06	no	yes	yes	yes	no	no
+816	TargetedTherapies	U-IGHV	T2	CLL	PB	no	posttreatment	WGS	816-08-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	34,029	97	2,06	yes	no	no	no	no	no
+816	TargetedTherapies	U-IGHV	T3	RT-DLBCL	LN	no	RT	WGS	816-06-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	27,88	50	2,06	yes	yes	yes	yes	no	no
+1523	TargetedTherapies	U-IGHV	Germline	Germline	PB	no	NA	WGS	1523-01-03ND	TruSeq DNA PCR-Free	HiSeq X Ten	38,471	99	NA	no	no	no	no	no	no
+1523	TargetedTherapies	U-IGHV	Germline_donor	Germline_donor	PB	no	NA	WGS	1523-04-01ND	TruSeq DNA Nano	HiSeq X Ten	34,314	100	NA	no	no	no	no	no	no
+1523	TargetedTherapies	U-IGHV	T1	CLL	PB	no	pretreatment	WGS	1523-01-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	28,97	94	2	no	no	no	no	no	no
+1523	TargetedTherapies	U-IGHV	T2	RT-DLBCL	LN	no	RT	WGS	1523-03-01BD	TruSeq DNA Nano	HiSeq X Ten	36,169	60	1,9	no	no	no	no	no	no
+3495	TargetedTherapies	U-IGHV	T1	CLL	LN	no	pretreatment	WGS	3495-02-01BD	TruSeq DNA PCR-Free	HiSeq X Ten	33,959	NA	NA	no	no	no	no	no	no
+3495	TargetedTherapies	U-IGHV	T2	RT-DLBCL	LN	no	RT	WGS	3495-03-01BD	TruSeq DNA PCR-Free	HiSeq X Ten	36,395	NA	NA	no	no	no	no	no	no
+3034	TargetedTherapies	U-IGHV	Germline	Germline	PB	no	NA	WGS	3034-01-01ND	TruSeq DNA PCR-Free	NovaSeq 6000	30,194	99	NA	no	no	no	no	no	no
+3034	TargetedTherapies	U-IGHV	T1	CLL	PB	no	posttreatment	WGS	3034-03-01TD	TruSeq DNA PCR-Free	NovaSeq 6000	26,117	89	2	no	no	no	no	no	no
+3034	TargetedTherapies	U-IGHV	T2	RT-DLBCL	LN	no	RT	WGS	3034-04-01BD	TruSeq DNA PCR-Free	NovaSeq 6000	26,676	55	2,03	no	no	no	no	no	no
+1669	TargetedTherapies	U-IGHV	Germline	Germline	PB	no	NA	WGS	1669-02-01ND	Kapa Library Preparation	HiSeq 2000	31,171	100	NA	no	no	no	no	no	no
+1669	TargetedTherapies	U-IGHV	T1	CLL	LN (FFPE)	no	pretreatment	WES	1669-06-05PD	SureSelect Human All Exon V5	HiSeq 2000	119,243	NA	NA	no	no	no	no	no	no
+1669	TargetedTherapies	U-IGHV	T2	RT-Plasmablastic	LN	no	RT	WGS	1669-04-01BD	Kapa Library Preparation	HiSeq 2000	32,298	75	1,87	no	no	no	no	no	no
+3299	TargetedTherapies	U-IGHV	Germline	Germline	PB	no	NA	WGS	3299-02-03ND	TruSeq DNA PCR-Free	HiSeq X Ten	28,898	100	NA	no	no	no	no	no	no
+3299	TargetedTherapies	U-IGHV	T1	CLL	BM	no	posttreatment	WGS	3299-01-02TD	TruSeq DNA PCR-Free	HiSeq X Ten	27,637	93	1,98	yes	yes	yes	no	yes	yes
+3299	TargetedTherapies	U-IGHV	T2	CLL	PB	no	posttreatment_2	WGS	3299-03-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	39,283	91	1,98	no	no	no	yes	yes	yes
+3299	TargetedTherapies	U-IGHV	T3	CLL	PB	no	posttreatment_3	WGS	3299-04-1TD	TruSeq DNA PCR-Free	HiSeq X Ten	31,579	94	1,93	no	yes	yes	no	yes	yes
+3299	TargetedTherapies	U-IGHV	T4	RT-Prolymphocytic	PB	no	RT	WGS	3299-02-01TD	TruSeq DNA PCR-Free	HiSeq X Ten	37,049	91	1,92	yes	yes	yes	yes	yes	yes
+3299	TargetedTherapies	U-IGHV	T5	RT-Prolymphocytic	BM	no	RT_2	WGS	3299-05-01TD	TruSeq DNA Nano	HiSeq X Ten	35,673	59	1,92	no	no	no	no	no	fail

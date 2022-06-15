@@ -1,0 +1,952 @@
+---
+title: "Mutational processes analyses"
+author: "Romina Royo & Ferran Nadeu"
+date: "`r format(Sys.time(), '%d/%m/%y')`"
+output:
+  html_document: 
+    theme: paper
+    toc: yes
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+# Initialize 
+
+## Load libraries
+
+```{r packages,message=FALSE}
+library("BSgenome")
+ref_genome <- "BSgenome.Hsapiens.UCSC.hg19"
+library(ref_genome, character.only = TRUE)
+library("MutationalPatterns")
+library("NMF")
+library("gridExtra")
+library("ggplot2")
+library("reshape2")
+library("circlize")
+library(data.table)
+library(RColorBrewer)
+library(ggrepel)
+library(mSigAct)
+library(openxlsx)
+# Custom functions to compare and plot signatures, classify and plot 3-nuc context, to assess signature contribution, and to identify kataegis
+source("mut_sigs_functions.R")
+```
+
+
+## Load input data
+
+```{r}
+# SNVs of RT study
+muts <- fread("supplementary_tables/SupplementaryTable3.tsv")
+muts <- muts[muts$TYPE=="SNV"]
+
+# SNVs from CLL cohorts
+muts_CLL <- fread("supplementary_tables/SupplementaryTable12.tsv")
+# CLL ICGC cohort of 147 WGS
+muts_ICGC <- muts_CLL[muts_CLL$TYPE=="SNV" & muts_CLL$COHORT=="ICGC"]
+icgc_samples <- unique(muts_ICGC$SAMPLE)
+# Post-treatment CLL
+muts_post <- muts_CLL[muts_CLL$TYPE=="SNV" & muts_CLL$COHORT=="Posttreatment"] # & ICGC_POSTTREATMENT
+post_samples <- unique(muts_post$SAMPLE)
+
+# Metadata
+meta <- fread("supplementary_tables/supplementaryTableX_metadata.txt")
+transformed <- c("RT-Plasmablastic","RT-Prolymphocytic","RT-DLBCL")
+meta$VARIANT_CALLING <- unlist(lapply(meta$WGS_WES_SAMPLE, function(x) ifelse(length(muts$VARIANT_CALLING[muts$SAMPLE==x])>1, unique(muts$VARIANT_CALLING[muts$SAMPLE==x]),NA)))
+meta_post <- read.xlsx("supplementary_tables/SupplementaryTable_CLL_posttreatment.xlsx",sheet = "Sheet1",startRow = 5, rows = seq(1:32))
+# metadata with IGHV status
+meta_ighv_post <- meta_post$IGHV_mutational_status
+meta_ighv <- fread("additional_data/IGHV_final_ICGC_and_RS.csv", stringsAsFactors = FALSE)
+
+cll_samples <- meta$WGS_WES_SAMPLE[startsWith(meta$TIME_POINT,"T1") & meta$DIAGNOSIS=="CLL" & !is.na(meta$VARIANT_CALLING) & meta$VARIANT_CALLING=="Tumor_vs_Normal" & !grepl("_2ndTissue",meta$DISEASE_STAGE)]
+rs_samples <- meta$WGS_WES_SAMPLE[meta$DIAGNOSIS %in% transformed & !is.na(meta$VARIANT_CALLING) & meta$VARIANT_CALLING=="Tumor_vs_Normal" & !grepl("_2ndTissue",meta$DISEASE_STAGE) & meta$DISEASE_STAGE!="RT_2"]
+rs_to_samples <- meta$WGS_WES_SAMPLE[meta$DIAGNOSIS %in% transformed & !is.na(meta$VARIANT_CALLING) & meta$VARIANT_CALLING=="RT_vs_CLL" & !grepl("_2ndTissue",meta$DISEASE_STAGE)]
+```
+
+## Prepare SNV data
+
+```{r,fig.height=3,fig.width=10}
+# Annotate context
+out <- snvsClassification(muts[,c("CHROM","POSITION","REF","ALT")], title = "RT Study")
+muts <- cbind(muts, out[[1]][,5:6])
+out[[2]]
+
+out <- snvsClassification(muts_ICGC[,c("CHROM","POSITION","REF","ALT")], title = "CLL ICGC")
+muts_ICGC <- cbind(muts_ICGC, out[[1]][,5:6])
+out[[2]]
+
+out <- snvsClassification(muts_post[,c("CHROM","POSITION","REF","ALT")], title = "CLL Post-treatment")
+muts_post <- cbind(muts_post, out[[1]][,5:6])
+out[[2]]
+
+# Create 3-nt context mutation matrices
+## RS Study by sample
+vcfs2 <- makeGRangesFromDataFrame(muts, keep.extra.columns=TRUE, ignore.strand=TRUE,
+                         seqinfo=NULL, seqnames.field="CHROM", start.field="POSITION",
+                         end.field="POSITION", starts.in.df.are.0based=FALSE)
+vcfs2 <- split(vcfs2, as.factor(vcfs2$SAMPLE))
+seqlevelsStyle(vcfs2) <- "UCSC"
+genome(vcfs2) <- "hg19"
+mut_mat <- mut_matrix(vcf_list = vcfs2, ref_genome = ref_genome)
+
+## RT Study by clone
+muts$SAMPLE_CLONE <- paste(muts$CASE,muts$CLUSTER,sep="_")
+# remove NA clones (i.e. 2nd tissue)
+muts_clones <- unique(muts[!is.na(muts$CLUSTER),c("CHROM","POSITION","REF","ALT","SAMPLE_CLONE","CASE")])
+vcfs2 <- makeGRangesFromDataFrame(muts_clones, keep.extra.columns=TRUE, ignore.strand=TRUE,
+                         seqinfo=NULL, seqnames.field="CHROM", start.field="POSITION",
+                         end.field="POSITION", starts.in.df.are.0based=FALSE)
+vcfs2 <- split(vcfs2, as.factor(vcfs2$SAMPLE_CLONE))
+seqlevelsStyle(vcfs2) <- "UCSC"
+genome(vcfs2) <- "hg19"
+mut_mat_clones <- mut_matrix(vcf_list = vcfs2, ref_genome = ref_genome)
+
+## CLL ICGC
+vcfs2 <- makeGRangesFromDataFrame(muts_ICGC, keep.extra.columns=TRUE, ignore.strand=TRUE,
+                       seqinfo=NULL, seqnames.field="CHROM", start.field="POSITION",
+                       end.field="POSITION", starts.in.df.are.0based=FALSE)
+vcfs2 <- split(vcfs2, as.factor(vcfs2$SAMPLE))
+seqlevelsStyle(vcfs2) <- "UCSC"
+genome(vcfs2) <- "hg19"
+mut_mat_ICGC <- mut_matrix(vcf_list = vcfs2, ref_genome = ref_genome)
+
+## CLL Post-treatment
+vcfs2 <- makeGRangesFromDataFrame(muts_post, keep.extra.columns=TRUE, ignore.strand=TRUE,
+                       seqinfo=NULL, seqnames.field="CHROM", start.field="POSITION",
+                       end.field="POSITION", starts.in.df.are.0based=FALSE)
+vcfs2 <- split(vcfs2, as.factor(vcfs2$SAMPLE))
+seqlevelsStyle(vcfs2) <- "UCSC"
+genome(vcfs2) <- "hg19"
+mut_mat_post <- mut_matrix(vcf_list = vcfs2, ref_genome = ref_genome)
+
+## Join RT Study + CLL ICGC
+mut_mat_all <- cbind(mut_mat,mut_mat_ICGC)
+mut_mat_all <- as.data.frame(mut_mat_all)
+## Join + post-treatment
+mut_mat_all_post <- cbind(mut_mat_all,mut_mat_post)
+
+# Calculate percentatge of 3-nuc context for each sample
+a <- sapply(colnames(mut_mat_all), function(x) {
+ mut_mat_all[,paste0(x, "_pct")] <<- mut_mat_all[,x] / sum(mut_mat_all[,x])
+})
+a_post <- sapply(colnames(mut_mat_all_post), function(x) {
+ mut_mat_all_post[,paste0(x, "_pct")] <<- mut_mat_all_post[,x] / sum(mut_mat_all_post[,x])
+})
+```
+
+## Mutational signatures input data
+
+```{r mutmat, cache=TRUE, fig.align='center'}
+# Mut types order
+mut_types <- fread("additional_data/mutTypes_order.txt",header=FALSE)
+
+# COSMIC
+cancer_signatures <- fread("additional_data/COSMIC_v3.2_SBS_GRCh37.txt", header = T, stringsAsFactors = F)
+cancer_signatures <- cancer_signatures[match(mut_types$V1,cancer_signatures$Type),]
+cancer_signatures <- cancer_signatures[,-c(1)]
+cancer_signatures <- as.data.frame(cancer_signatures)
+
+sbsrt <- fread("supplementary_tables/SBS-ganciclovir_RT2.tsv")
+cancer_signatures <- cbind(cancer_signatures,sbsrt[,c("SBS-ganciclovir","SBS-RT")])
+
+# SBS-melphalan from Rustad et al.
+load(file="additional_data/signature_ref.rda")
+SBSMM1 <- signature_ref[,c("SBS-MM1"),drop=FALSE]
+colnames(SBSMM1) <- c("SBS-melphalan")
+cancer_signatures <- cbind(cancer_signatures,SBSMM1[,c("SBS-melphalan"),drop=FALSE])
+
+# Fitting input thresholds and parameters
+threshold_add <- 0.05
+threshold <- 0.01
+mutated_cases_ICGC <- meta_ighv$Case[meta_ighv$IGHV_class=="mutated" & !is.na(meta_ighv$Case)]
+mutated_cases_ICGC <- mutated_cases_ICGC[mutated_cases_ICGC %in% unlist(lapply(colnames(mut_mat_ICGC), function(x)strsplit(x,"_")[[1]][3]))]
+mutated_cases_ICGC <- paste0("ICGC_CLL_",mutated_cases_ICGC)
+mutated_cases <- meta$WGS_WES_SAMPLE[meta$IGHV=="M-IGHV" & !is.na(meta$VARIANT_CALLING) & meta$VARIANT_CALLING!="RT_vs_CLL"]
+patient_list <- NULL
+
+# Variables used in different plots
+all_sigs <- c("SBS1", "SBS5", "SBS8", "SBS9", "SBS18", "SBS2", "SBS13", "SBS17b", "SBS-ganciclovir","SBS-RT", "SBS84", "SBS85" )
+sigs <- c("SBS1", "SBS5", "SBS8", "SBS9", "SBS18", "SBS2", "SBS13", "SBS17b", "SBS-ganciclovir","SBS-RT","SBS-melphalan")
+sigsColors <- c("#CEE8E8", "#C1DCA9", "#ADC2E6", "#FFE426", "#73C09C", "#F8B480", "#A17756", "#F6BDD6","#ED6E19", "#BE1622", "#943E90", "#FFF9C7", "#ADAA16")
+sigsColors_ICGC <- c("#CEE8E8", "#C1DCA9", "#ADC2E6", "#FFE426", "#73C09C", "#F6BDD6", "#BE1622", "#FFF9C7", "#ADAA16")
+orderCases <- c(meta$WGS_WES_SAMPLE[!is.na(meta$VARIANT_CALLING) & meta$VARIANT_CALLING=="Tumor_vs_Normal"], 
+                meta$WGS_WES_SAMPLE[!is.na(meta$VARIANT_CALLING) & meta$VARIANT_CALLING=="RT_vs_CLL"])
+orderDonors <- unique(unlist(lapply(orderCases,function(x)strsplit(x,"-")[[1]][[1]])))
+```
+
+
+# Visualization
+
+## PCA 3-nuc context
+
+Overall PCA visualization according to 3-nuc context.
+
+### RT study + CLL from ICGC + including CLL post-treatment
+
+```{r}
+# Using the percentages to visualize...
+mat_vis <- mut_mat_all_post[,grepl("_pct",colnames(mut_mat_all_post))]
+colnames(mat_vis) <- gsub("_pct","",colnames(mat_vis))
+
+# PCA of RT Study (only CLL diag + RT) + CLL ICGC
+mat_vis <- mat_vis[,colnames(mat_vis) %in% c(cll_samples,rs_samples,icgc_samples,post_samples)]
+
+pca <- prcomp(t(mat_vis), scale=T)
+x <- summary(pca)
+pcaTable <- pca$x[,1:2]
+pcaTable <- as.data.frame(pcaTable)
+pcaTable$Sample <- colnames(mat_vis)
+pcaTable$Group <- unlist(lapply(pcaTable$Sample,function(x)  ifelse(x %in% cll_samples, "Diag", ifelse(x %in% rs_samples, "RT", 
+                                                                                                       ifelse(x %in% icgc_samples, "ICGC", "Post")))))
+pcaTable$Group <- factor(pcaTable$Group, levels=c("Diag", "RT", "ICGC", "Post"))
+pcaTable$Case[pcaTable$Sample %in% c(cll_samples,rs_samples,post_samples)] <- unlist(lapply(as.character(pcaTable$Sample[pcaTable$Sample %in% c(cll_samples,rs_samples,post_samples)]),function(x) strsplit(x,"-")[[1]][[1]]))
+pcaTable$Case[pcaTable$Sample %in% c(icgc_samples)] <- unlist(lapply(as.character(pcaTable$Sample[pcaTable$Sample %in% c(icgc_samples)]),function(x) strsplit(x,"_")[[1]][3]))
+pcaTable$case_label <- unlist(lapply(pcaTable$Sample,function(x) ifelse(x %in% c(cll_samples,rs_samples),strsplit(x,"-")[[1]][1],"")))
+pcaTable$IGHV[pcaTable$Sample %in% c(cll_samples,rs_samples,icgc_samples)] <- unlist(lapply(pcaTable$Sample[pcaTable$Sample %in% c(cll_samples,rs_samples,icgc_samples)], 
+                             function(x) ifelse(startsWith(x,"ICGC"),meta_ighv$IGHV_class[meta_ighv$Case==as.integer(strsplit(x,"_")[[1]][3])],
+                             meta_ighv$IGHV_class[meta_ighv$Case==as.integer(strsplit(x,"-")[[1]][1])])))
+pcaTable$IGHV[pcaTable$Sample %in% post_samples] <- unlist(lapply(pcaTable$Sample[pcaTable$Sample %in% c(post_samples)],function(x)
+                                                                  meta_post$IGHV_mutational_status[meta_post$Case==as.integer(strsplit(x,"-")[[1]][1])]))
+
+c4 <- ggplot(pcaTable, aes(x=PC1, y=PC2)) + 
+  geom_point(aes(shape=factor(Group,levels=(c("Diag","RT","ICGC", "Post"))), fill=as.factor(Group),color=as.factor(IGHV), size=as.factor(Group)))+ 
+  scale_shape_manual(values=c(21, 21, 4, 3)) + scale_size_manual(values=c(3.5,3.5,2,2)) +
+  theme_classic() +
+  xlab(paste0("PC1 (", round(x$importance[2,1]*100,1), "%)")) + 
+  ylab(paste0("PC2 (", round(x$importance[2,2]*100,1), "%)")) +  
+  labs(shape="Group", fill="IGHV")+
+  guides(fill=guide_legend(override.aes=list(shape=21, col="white", size=3))) +
+  scale_fill_manual(values=c("#EDEDED", "#CE899A","black","black")) + 
+  scale_color_manual(values=c("black", "gray70")) + 
+
+  theme(axis.text=element_blank(), axis.ticks=element_blank()) +
+  ggtitle("PCA")+guides(color=FALSE) 
+c4
+
+pdf("outputs/pca_pct_post.pdf",height=4, width=5.5,useDingbats = F)
+c4
+dev.off()
+
+# Distance of PC2 between CLL diag and RT
+df <- pcaTable[pcaTable$Group!="ICGC" & pcaTable$Group!="Post",]
+df <- df[df$Case!="1669",]
+
+df_dist <- data.frame()
+for (case in unique(df$Case)){
+  d <- abs(abs(df$PC2[df$Case==case & df$Group=="RT"]) - abs(df$PC2[df$Case==case & df$Group=="Diag"]))
+  pc2_cll <- df$PC2[df$Case==case & df$Group=="Diag"]
+  pc1_cll <- df$PC1[df$Case==case & df$Group=="Diag"]
+  pc2_rs <- df$PC2[df$Case==case & df$Group=="RT"]
+  pc1_rs <- df$PC1[df$Case==case & df$Group=="RT"]
+  ighv <- df$IGHV[df$Case==case & df$Group=="RT"]
+  aux <- data.frame(Case=case,Dist=d,PC1_CLL=pc1_cll,PDC2_CLL=pc2_cll,PC1_RT=pc1_rs,PC2_RT=pc2_rs,IGHV=ighv)
+  df_dist <- rbind(df_dist,aux)
+}
+
+df_dist$Dist4 <- -1 *(df_dist$PDC2_CLL - df_dist$PC2_RT) 
+df_dist <- df_dist[order(df_dist$Dist4,decreasing = TRUE),]
+c5 <- ggplot(df_dist) +
+  geom_point(aes(y=0,x=factor(Case,levels=Case),fill=as.factor(IGHV),color=as.factor(IGHV)),shape=21)+
+  geom_point(aes(y=Dist4,x=factor(Case,levels=Case),fill=as.factor(IGHV),color=as.factor(IGHV)),shape=24) + 
+geom_segment(
+  aes(y = 0.25, x = as.factor(Case), yend = Dist4-0.25, xend = as.factor(Case),colour = as.factor(IGHV)),
+  data = df_dist,
+  arrow = arrow(length = unit(0.015, "npc")),
+     lineend = "round", # See available arrow types in example above
+    linejoin = "round"
+) +
+  ylab("PC2 distance between CLL and RT") + xlab("Case") +
+  labs(shape="Group", fill="IGHV")+
+  scale_fill_manual(values=c("black", "gray70")) + 
+  scale_color_manual(values=c("black", "gray70")) + 
+  #scale_y_discrete(position = "right") +
+  theme_classic()+guides(color=FALSE) + ylim(-1,16)
+
+c5  
+
+pdf("outputs/distance_CLLRT_post.pdf",height=2, width=5.5,useDingbats = F)
+c5
+dev.off()
+```
+
+# Mutational signatures
+
+## Preliminary considerations
+
+### Fitting of ICGC and presence of SBS-RT in ICGC CLLs
+
+```{r}
+smallContributionMatrix_ICGC <- fitting_sigs3(cancer_signatures, threshold, mut_mat_ICGC, sigs, patient_list, threshold_add, mutated_cases_ICGC) 
+
+write.table(smallContributionMatrix_ICGC, "outputs/supplementaryTableX_signature_contributions_bySample_ICGC.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+```
+
+
+```{r,fig.width=18,fig.height=6}
+smallContributionMatrix <- smallContributionMatrix_ICGC
+smallContributionMatrix$Total <- rowSums(smallContributionMatrix_ICGC[,seq(3,ncol(smallContributionMatrix_ICGC))])
+orderCases_ICGC <- smallContributionMatrix$Case[order(smallContributionMatrix$Total)]
+orderCases_ICGC <- c(orderCases_ICGC[!orderCases_ICGC %in% mutated_cases_ICGC],orderCases_ICGC[orderCases_ICGC %in% mutated_cases_ICGC])
+smallContributionMatrix <- smallContributionMatrix[,-ncol(smallContributionMatrix)]
+
+s <- smallContributionMatrix[, -2]
+sM <- melt(s,id.vars = "Case")
+sM$Case <- factor(sM$Case, levels = orderCases_ICGC)
+sM <- sM[sM$value > 0, ]
+colnames(sM) <- c("Case", "Signature", "Contribution")
+sM$Signature <- factor(sM$Signature,levels=sigs)
+sM$donor <- unlist(lapply(as.character(sM$Case),function(x)strsplit(x,"-")[[1]][[1]]))
+sM$donor_f = factor(sM$donor, levels=orderCases_ICGC)
+sM$Case2 <- sM$Case
+
+p<-ggplot(data=sM, aes(x=as.factor(Case2), y=Contribution, fill=Signature)) + coord_cartesian(ylim=c(0,8500)) + scale_y_continuous(expand = c(0, 0)) +
+  geom_bar(stat="identity", col="black") + theme_classic() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5, size = 8)) + scale_fill_manual(values=sigsColors_ICGC) + xlab("Case")+
+  # facet_grid(~donor_f, scales = "free_x",space = "free",switch = "x")+
+  theme(
+    strip.background = element_blank(),
+    strip.placement = "outside",
+    strip.text.x = element_text(face="bold")
+  )
+p
+
+pdf("outputs/sigs_contrib_bySample_ICGC.pdf",height = 6,width = 33,useDingbats = F)
+p
+dev.off()
+```
+
+### Fitting and presence of SBS-RT in post-treatment CLLs
+
+```{r}
+mutated_cases_post <- meta_post$Case[meta_post$IGHV_mutational_status=="mutated" & !is.na(meta_post$Case)]
+# mutated_cases_post
+mutated_samples_post <- meta_post$Sample[meta_post$IGHV_mutational_status=="mutated" & !is.na(meta_post$Sample)]
+# mutated_samples_post
+
+ss_post <- fitting_sigs3(cancer_signatures, threshold, mut_mat_post, sigs, patient_list, threshold_add, mutated_samples_post, TRUE) 
+
+smallContributionMatrix_post <- ss_post
+
+write.table(smallContributionMatrix_post, "outputs/signature_contributions_bySAMPLE_CLL_POSTREATMENT.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+```
+
+```{r}
+smallContributionMatrix_post$Total <- rowSums(smallContributionMatrix_post[,seq(3,ncol(smallContributionMatrix_post))])
+orderCases_post <- smallContributionMatrix_post$Case[order(smallContributionMatrix_post$Total)]
+ymax <- max(smallContributionMatrix_post$Total)
+orderCases_post <- as.numeric(unlist(lapply(orderCases_post, function(x) strsplit(x,"-")[[1]][1])))
+
+orderCases_post <- c(orderCases_post[!orderCases_post %in% mutated_cases_post],orderCases_post[orderCases_post %in% mutated_cases_post])
+
+smallContributionMatrix_post <- smallContributionMatrix_post[,-ncol(smallContributionMatrix_post)]
+
+
+s <- smallContributionMatrix_post[, -2]
+sM <- melt(s,id.vars = "Case")
+sM$Case <- unlist(lapply(sM$Case, function(x) as.numeric(strsplit(x,"-")[[1]][1])))
+sM$Case <- factor(sM$Case, levels = orderCases_post)
+sM <- sM[sM$value > 0, ]
+colnames(sM) <- c("Case", "Signature", "Contribution")
+
+p<-ggplot(data=sM, aes(x=as.factor(Case), y=Contribution, fill=Signature)) + coord_cartesian(ylim=c(0,ymax)) + scale_y_continuous(expand = c(0, 0)) +
+  geom_bar(stat="identity", col="black") + theme_classic() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5, size = 8)) + scale_fill_manual(values=sigsColors) + xlab("Case")+
+  theme(
+    strip.background = element_blank(),
+    strip.placement = "outside",
+    strip.text.x = element_text(face="bold")
+  )
+p
+
+pdf("outputs/sigs_contrib_bySample_CLL_POST_TREATMENT_SEP_ORDER.pdf",height = 6,width = 18,useDingbats = F)
+p
+dev.off()
+```
+## Fitting by sample
+
+```{r}
+colnames(cancer_signatures)
+smallContributionMatrix <- fitting_sigs3(cancer_signatures, threshold, mut_mat, sigs, patient_list, threshold_add, mutated_cases) 
+
+smallContributionMatrix[smallContributionMatrix$`SBS-melphalan` >0,]
+
+write.table(smallContributionMatrix, "outputs/supplementaryTableX_signature_contributions_bySample.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+
+contrib_bysample <- smallContributionMatrix
+```
+
+
+### Plot contributions by sample
+
+```{r,fig.width=18,fig.height=6}
+smallContributionMatrix <- contrib_bysample
+s <- smallContributionMatrix[, -2]
+sM <- melt(s,id.vars = "Case")
+sM$Case <- factor(sM$Case, levels = orderCases)
+sM <- sM[sM$value > 0, ]
+colnames(sM) <- c("Case", "Signature", "Contribution")
+sM$donor <- unlist(lapply(as.character(sM$Case),function(x)strsplit(x,"-")[[1]][[1]]))
+sM$donor_f = factor(sM$donor, levels=orderDonors)
+sM$Case2 <- unlist(lapply(as.character(sM$Case), function(x) ifelse(!grepl("_2ndTissue",meta$DISEASE_STAGE[meta$WGS_WES_SAMPLE==x]), meta$TIME_POINT[meta$WGS_WES_SAMPLE==x], paste0(meta$TIME_POINT[meta$WGS_WES_SAMPLE==x],"B"))))
+sM$Signature <- factor(sM$Signature, levels = sigs)
+
+p<-ggplot(data=sM, aes(x=as.factor(Case2), y=Contribution, fill=Signature)) + coord_cartesian(ylim=c(0,8500)) + scale_y_continuous(expand = c(0, 0)) +
+  geom_bar(stat="identity", col="black") + theme_classic() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5, size = 8)) + scale_fill_manual(values=sigsColors) + xlab("Case")+facet_grid(~donor_f, scales = "free_x",space = "free",switch = "x")+
+  theme(
+    strip.background = element_blank(),
+    strip.placement = "outside",
+    strip.text.x = element_text(face="bold")
+  )
+p
+
+pdf("outputs/sigs_contrib_bySample.pdf",height = 6,width = 18,useDingbats = F)
+p
+dev.off()
+```
+
+
+### Test of SBS-melphalan presence in all series (ICGC, post-treatment CLL, RT study)
+
+```{r}
+# Get signatures for each patient
+db <- contrib_bysample
+db2 <- smallContributionMatrix_ICGC
+db2[setdiff(names(db), names(db2))] <- 0
+db3 <- smallContributionMatrix_post
+db3[setdiff(names(db), names(db3))] <- 0
+db <- rbind(db,db2,db3)
+
+db$Patient <- db$Case
+patient_list <- list()
+for(patient in unique(db$Patient)){
+  sdb <- db[db$Patient==patient, 3:(ncol(db)-1)]
+  patient_list[[as.character(patient)]] <- names(colSums(sdb)[colSums(sdb) > 0])
+}
+
+res_all <- data.frame()
+mm <- mut_mat_all_post[,!grepl("_pct",colnames(mut_mat_all_post))]
+for (s in colnames(mm)){
+  sigs_c <- patient_list[names(patient_list)==s][[1]]
+  if (length(which(sigs_c=="SBS-melphalan"))==1){
+    num <- which(sigs_c=="SBS-melphalan")
+  } else {
+    sigs_c <- c(sigs_c,"SBS-melphalan")
+    num <- length(sigs_c)
+  }
+  res <- SignaturePresenceTest(as.matrix(mm[,s,drop=FALSE]),as.matrix(cancer_signatures[, sigs_c]),num)
+  res_all <- rbind(res_all, data.frame(SAMPLE=names(res), PVAL=res[[1]]$chisq.p))
+}
+
+res_all$PVAL_adj <- p.adjust(res_all$PVAL)
+
+res_all[res_all$PVAL_adj<0.05,]
+
+DT::datatable(res_all, options = list(scrollX = T, scrollY=T), rownames = F)
+
+write.table(res_all, "outputs/test_presence_SBSMM1_inRT.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+```
+
+
+### Case 4675 has statistically significant contribution of SBS-melphalan
+
+We add SBS-melphalan to case 4675 based on statistical significance by mSigAct
+Updating tables and plots...
+
+```{r}
+contrib_bysample[contrib_bysample$Case=="4675-04-01BD",]
+
+s <- "4675-04-01BD"
+c <- as.integer(as.character(strsplit(s,"-")[[1]][1]))
+sigs_c <- patient_list[names(patient_list)==s][[1]]
+sigs_c <- c(sigs_c, "SBS-melphalan")
+
+signs <- cancer_signatures[,sigs_c]
+fit_res <- fit_to_signatures(matrix(mut_mat[,c("4675-04-01BD")], ncol=1), as.matrix(signs))
+finalCos <- cosineSimilarity(mut_mat[,c("4675-04-01BD")], fit_res$reconstructed[,1])
+finalCos # 0.9731464
+
+contribution <- fit_res$contribution
+newresult <- c(round(finalCos,4), round(contribution,0))
+
+contrib_bysample[contrib_bysample$Case=="4675-04-01BD",c(2, match(rownames(contribution), colnames(contrib_bysample)))] <- newresult
+contrib_bysample[contrib_bysample$Case=="4675-04-01BD",]
+```
+```{r,fig.width=18,fig.height=6}
+write.table(contrib_bysample, "outputs/supplementaryTableX_signature_contributions_bySample_MM1.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+
+### Re-plot contributions by sample
+smallContributionMatrix <- contrib_bysample
+s <- smallContributionMatrix[, -2]
+sM <- melt(s,id.vars = "Case")
+sM$Case <- factor(sM$Case, levels = orderCases)
+sM <- sM[sM$value > 0, ]
+colnames(sM) <- c("Case", "Signature", "Contribution")
+sM$donor <- unlist(lapply(as.character(sM$Case),function(x)strsplit(x,"-")[[1]][[1]]))
+sM$donor_f = factor(sM$donor, levels=orderDonors)
+sM$Case2 <- unlist(lapply(as.character(sM$Case), function(x) ifelse(!grepl("_2ndTissue",meta$DISEASE_STAGE[meta$WGS_WES_SAMPLE==x]), meta$TIME_POINT[meta$WGS_WES_SAMPLE==x], paste0(meta$TIME_POINT[meta$WGS_WES_SAMPLE==x],"B"))))
+sM$Signature <- factor(sM$Signature, levels = sigs)
+
+p<-ggplot(data=sM, aes(x=as.factor(Case2), y=Contribution, fill=Signature)) + coord_cartesian(ylim=c(0,8500)) + scale_y_continuous(expand = c(0, 0)) +
+  geom_bar(stat="identity", col="black") + theme_classic() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5, size = 8)) + scale_fill_manual(values=sigsColors) + xlab("Case")+facet_grid(~donor_f, scales = "free_x",space = "free",switch = "x")+
+  theme(
+    strip.background = element_blank(),
+    strip.placement = "outside",
+    strip.text.x = element_text(face="bold")
+  )
+p
+
+pdf("outputs/sigs_contrib_bySample_MM1.pdf",height = 6,width = 18,useDingbats = F)
+p
+dev.off()
+```
+
+```{r,fig.height=2.8,fig.width=6}
+### Re-do summary of CLL and RT signature contributions
+m <- smallContributionMatrix_ICGC
+m2 <- contrib_bysample
+m2$Case2 <- unlist(lapply(m2$Case,function(x) as.integer(as.character(strsplit(x,"-")[[1]][1]))))
+
+sigs_ICGC_UMUT <- colSums(m[!m$Case %in% mutated_cases_ICGC,seq(3,ncol(m))])
+sigs_ICGC_MUT <- colSums(m[m$Case %in% mutated_cases_ICGC,seq(3,ncol(m))])
+sigs_UCLL <- colSums(m2[m2$Case %in% cll_samples & m2$Case2 %in% meta_ighv$Case[meta_ighv$IGHV_class=="unmutated"],sigs])
+sigs_MCLL <- colSums(m2[m2$Case %in% cll_samples & m2$Case2 %in% meta_ighv$Case[meta_ighv$IGHV_class=="mutated"],sigs])
+sigs_RT <- colSums(m2[m2$Case %in% c(rs_samples,rs_to_samples),sigs])
+
+# Total counts
+sigs_ICGC_UMUT <- as.data.frame(sigs_ICGC_UMUT)
+sigs_ICGC_UMUT$sig <- rownames(sigs_ICGC_UMUT)
+sigs_ICGC_MUT <- as.data.frame(sigs_ICGC_MUT)
+sigs_ICGC_MUT$sig <- rownames(sigs_ICGC_MUT)
+sigs_UCLL <- as.data.frame(sigs_UCLL)
+sigs_UCLL$sig <- rownames(sigs_UCLL)
+sigs_MCLL <- as.data.frame(sigs_MCLL)
+sigs_MCLL$sig <- rownames(sigs_MCLL)
+sigs_RT <- as.data.frame(sigs_RT)
+sigs_RT$sig <- rownames(sigs_RT)
+
+# Percentage
+sigs_ICGC_UMUT$sigs_ICGC2 <- sigs_ICGC_UMUT$sigs_ICGC_UMUT/sum(sigs_ICGC_UMUT$sigs_ICGC_UMUT)
+sigs_ICGC_MUT$sigs_ICGC2 <- sigs_ICGC_MUT$sigs_ICGC_MUT/sum(sigs_ICGC_MUT$sigs_ICGC_MUT)
+sigs_UCLL$sigs_UCLL2 <- sigs_UCLL$sigs_UCLL/sum(sigs_UCLL$sigs_UCLL)
+sigs_MCLL$sigs_MCLL2 <- sigs_MCLL$sigs_MCLL/sum(sigs_MCLL$sigs_MCLL)
+sigs_RT$sigs_RT2 <- sigs_RT$sigs_RT/sum(sigs_RT$sigs_RT)
+
+sigs_both <- sigs_UCLL
+sigs_both$PHASE <- "UCLL"
+colnames(sigs_both) <- c("num","sig","num2","PHASE")
+sigs_MCLL_aux <- sigs_MCLL
+sigs_MCLL_aux$PHASE <- "MCLL"
+colnames(sigs_MCLL_aux) <- c("num","sig","num2","PHASE")
+sigs_both <- rbind(sigs_both,sigs_MCLL_aux)
+sigs_RT_aux <- sigs_RT
+sigs_RT_aux$PHASE <- "RT"
+colnames(sigs_RT_aux) <- c("num","sig","num2","PHASE")
+sigs_both <- rbind(sigs_both,sigs_RT_aux)
+sigs_UMUT_aux <- sigs_ICGC_UMUT
+sigs_UMUT_aux$PHASE <- "UMUT"
+colnames(sigs_UMUT_aux) <- c("num","sig","num2","PHASE")
+sigs_both <- rbind(sigs_both,sigs_UMUT_aux)
+sigs_MUT_aux <- sigs_ICGC_MUT
+sigs_MUT_aux$PHASE <- "MUT"
+colnames(sigs_MUT_aux) <- c("num","sig","num2","PHASE")
+sigs_both <- rbind(sigs_both,sigs_MUT_aux)
+
+gg <- ggplot(data = sigs_both, aes(x = factor(PHASE,levels=c("UMUT","MUT","UCLL","MCLL","RT")), y = num2,fill=factor(sig,levels=sigs))) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  theme(
+        plot.title = element_text(size = 11.5,hjust = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()
+  ) +
+  scale_fill_manual(values=sigsColors) +
+  scale_y_continuous(labels = scales::percent)+
+  labs(fill = "Signature") + ylab("Relative contribution (%)") + xlab("Summary")
+gg
+
+
+pdf("outputs/summary_CLL_RT_ICGC_barplot_MM1.pdf"
+    ,height=2.8, width=3,useDingbats = F)
+gg
+dev.off()
+```
+
+```{r}
+# Update patient_list
+# Get signatures for each patient
+db <- contrib_bysample
+db$Patient <- as.numeric(sapply(db$Case, function(x) strsplit(x, "-")[[1]][1]))
+patient_list <- list()
+for(patient in unique(db$Patient)){
+  sdb <- db[db$Patient==patient, 3:(ncol(db)-1)]
+  patient_list[[as.character(patient)]] <- names(colSums(sdb)[colSums(sdb) > 0])
+}
+```
+
+## Fitting by clones
+
+Next, we explore the contribution of the extracted signatures to each subclone. The fitting will only consider those signatures that are found to be contributing to the sample.
+
+
+```{r}
+smallContributionMatrix_clones <- fitting_sigs3(cancer_signatures, threshold, mut_mat_clones, sigs, patient_list, threshold_add) 
+
+write.table(smallContributionMatrix_clones, "outputs/supplementaryTableX_signature_contributions_byClone.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+
+contrib_byclone <- smallContributionMatrix_clones
+```
+
+### Plot contributions by clone
+
+```{r,fig.height=4,fig.width=10}
+smallContributionMatrix <- smallContributionMatrix_clones
+orderCases <- smallContributionMatrix$Case[order(rowSums(smallContributionMatrix[,3:ncol(smallContributionMatrix)]), decreasing = T)]
+smallContributionMatrix$Case <- factor(smallContributionMatrix$Case, levels = orderCases)
+p<-ggplot(data=smallContributionMatrix[,1:2], aes(x=as.factor(Case), y=Accuracy)) + 
+  geom_bar(stat="identity", fill="deepskyblue3", col="black") + xlab("Case") + ylab("Accuracy (cosine similarity)") +
+  geom_hline(aes(yintercept=.95)) + coord_cartesian(ylim=c(0,1)) + scale_y_continuous(expand = c(0, 0)) +  
+  theme_classic() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5, size = 8))
+p
+```
+
+
+```{r, fig.width=20, fig.height=8}
+smallContributionMatrix <- smallContributionMatrix_clones
+s <- smallContributionMatrix[, c(1, 3:ncol(smallContributionMatrix))]
+sM <- melt(s,id.vars = "Case")
+sM$Case <- factor(sM$Case)
+sM <- sM[sM$value > 0, ]
+colnames(sM) <- c("Case", "Signature", "Contribution")
+sM$Signature <- factor(sM$Signature, levels = sigs)
+
+orderCases2 <- as.character(sM$Case)
+orderCases2 <- unique(sort(orderCases2))
+sM$Case <- factor(sM$Case, levels = orderCases2)
+p<-ggplot(data=sM, aes(x=as.factor(Case), y=Contribution, fill=Signature)) + coord_cartesian(ylim=c(0,6500)) + scale_y_continuous(expand = c(0, 0)) + 
+  geom_bar(stat="identity", col="black") + theme_classic() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5, size = 8)) + scale_fill_manual(values=sigsColors)
+p
+
+pdf("outputs/sigs_contrib_byClone.pdf",useDingbats = FALSE,width=10,height=6)
+p
+dev.off()
+```
+
+#### Special consideration for SBS-melphalan contribution to 4675
+
+```{r}
+# SBS-melphalan can be significantly contributing to 4675-04-01BD
+s <- "4675_3"
+c <- as.integer(as.character(strsplit(s,"_")[[1]][1]))
+sigs_c <- patient_list[names(patient_list)==c][[1]]
+num <- 5
+
+res <- SignaturePresenceTest(as.matrix(mut_mat_clones[,s,drop=FALSE]),as.matrix(cancer_signatures[,sigs_c]),num)
+print(paste0("Significance of SBS-melphalan: ",res$chisq.p))
+
+# Re-do table and plot
+contrib_byclone[contrib_byclone$Case=="4675_3",]
+
+s <- "4675-04-01BD"
+c <- as.integer(as.character(strsplit(s,"-")[[1]][1]))
+sigs_c <- patient_list[names(patient_list)==c][[1]]
+
+signs <- cancer_signatures[,sigs_c]
+fit_res <- fit_to_signatures(matrix(mut_mat_clones[,c("4675_3")], ncol=1), as.matrix(signs))
+finalCos <- cosineSimilarity(mut_mat_clones[,c("4675_3")], fit_res$reconstructed[,1])
+finalCos # 0.9725297
+
+contribution <- fit_res$contribution
+newresult <- c(round(finalCos,4), round(contribution,0))
+
+contrib_byclone[contrib_byclone$Case=="4675_3",c(2, match(rownames(contribution), colnames(contrib_byclone)))] <- newresult
+contrib_byclone[contrib_byclone$Case=="4675_3",]
+
+write.table(contrib_byclone, "outputs/supplementaryTableX_signature_contributions_byClone_MM1.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+
+smallContributionMatrix <- contrib_byclone
+s <- smallContributionMatrix[, c(1, 3:ncol(smallContributionMatrix))]
+sM <- melt(s,id.vars = "Case")
+sM$Case <- factor(sM$Case)
+sM <- sM[sM$value > 0, ]
+colnames(sM) <- c("Case", "Signature", "Contribution")
+sM$Signature <- factor(sM$Signature, levels = sigs)
+
+orderCases2 <- as.character(sM$Case)
+orderCases2 <- unique(sort(orderCases2))
+sM$Case <- factor(sM$Case, levels = orderCases2)
+p<-ggplot(data=sM, aes(x=as.factor(Case), y=Contribution, fill=Signature)) + coord_cartesian(ylim=c(0,6500)) + scale_y_continuous(expand = c(0, 0)) + 
+  geom_bar(stat="identity", col="black") + theme_classic() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5, size = 8)) + scale_fill_manual(values=sigsColors)
+p
+
+pdf("outputs/sigs_contrib_byClone_MM1.pdf",useDingbats = FALSE,width=10,height=6)
+p
+dev.off()
+```
+
+### Summary of CLL and RT clones
+
+```{r,fig.height=2.8,fig.width=5}
+m <- smallContributionMatrix_clones
+# 1) RT clones CLL-like
+# 2) RT clones without therapy-related signatures and with APOBEC
+# 3) RT clones with MM1
+# 4) RT clones with SBS-RT
+rs_clones1 <- c("1563_3","816_4","3034_3")
+rs_clones2 <- c("839_4")
+rs_clones3 <- c("4675_3","1523_2")
+rs_clones4 <- c("63_4","365_5","12_7","19_5","3299_4")
+ucll_clones <- c("839_1","1563_1","4675_1","63_1","12_1","816_1","1523_1","3034_1","3299_1")
+mcll_clones <- c("19_1","365_1")
+sigs_UCLL_clone <- colSums(m[m$Case %in% ucll_clones,seq(3,ncol(m))])
+sigs_MCLL_clone <- colSums(m[m$Case %in% mcll_clones,seq(3,ncol(m))])
+sigs_RT_clone1 <- colSums(m[m$Case %in% rs_clones1,seq(3,ncol(m))])
+sigs_RT_clone2 <- colSums(m[m$Case %in% rs_clones2,seq(3,ncol(m))])
+sigs_RT_clone3 <- colSums(m[m$Case %in% rs_clones3,seq(3,ncol(m))])
+sigs_RT_clone4 <- colSums(m[m$Case %in% rs_clones4,seq(3,ncol(m))])
+
+# Total counts
+sigs_UCLL_clone <- as.data.frame(sigs_UCLL_clone)
+sigs_UCLL_clone$sig <- rownames(sigs_UCLL_clone)
+sigs_MCLL_clone <- as.data.frame(sigs_MCLL_clone)
+sigs_MCLL_clone$sig <- rownames(sigs_MCLL_clone)
+sigs_RT_clone1 <- as.data.frame(sigs_RT_clone1)
+sigs_RT_clone1$sig <- rownames(sigs_RT_clone1)
+sigs_RT_clone2 <- as.data.frame(sigs_RT_clone2)
+sigs_RT_clone2$sig <- rownames(sigs_RT_clone2)
+sigs_RT_clone3 <- as.data.frame(sigs_RT_clone3)
+sigs_RT_clone3$sig <- rownames(sigs_RT_clone3)
+sigs_RT_clone4 <- as.data.frame(sigs_RT_clone4)
+sigs_RT_clone4$sig <- rownames(sigs_RT_clone4)
+
+# Percentage
+sigs_UCLL_clone$sigs_UCLL_clone2 <- sigs_UCLL_clone$sigs_UCLL_clone/sum(sigs_UCLL_clone$sigs_UCLL_clone)
+sigs_MCLL_clone$sigs_MCLL_clone2 <- sigs_MCLL_clone$sigs_MCLL_clone/sum(sigs_MCLL_clone$sigs_MCLL_clone)
+sigs_RT_clone1$sigs_RT_clone2 <- sigs_RT_clone1$sigs_RT_clone1/sum(sigs_RT_clone1$sigs_RT_clone1)
+sigs_RT_clone2$sigs_RT_clone22 <- sigs_RT_clone2$sigs_RT_clone2/sum(sigs_RT_clone2$sigs_RT_clone2)
+sigs_RT_clone3$sigs_RT_clone2 <- sigs_RT_clone3$sigs_RT_clone3/sum(sigs_RT_clone3$sigs_RT_clone3)
+sigs_RT_clone4$sigs_RT_clone2 <- sigs_RT_clone4$sigs_RT_clone4/sum(sigs_RT_clone4$sigs_RT_clone4)
+
+sigs_both <- sigs_UCLL_clone
+sigs_both$PHASE <- "UCLL"
+colnames(sigs_both) <- c("num","sig","num2","PHASE")
+sigs_MCLL_clone_aux1 <- sigs_MCLL_clone
+sigs_MCLL_clone_aux1$PHASE <- "MCLL"
+colnames(sigs_MCLL_clone_aux1) <- c("num","sig","num2","PHASE")
+sigs_both <- rbind(sigs_both,sigs_MCLL_clone_aux1)
+sigs_RT_clone_aux1 <- sigs_RT_clone1
+sigs_RT_clone_aux1$PHASE <- "RT1"
+colnames(sigs_RT_clone_aux1) <- c("num","sig","num2","PHASE")
+sigs_both <- rbind(sigs_both,sigs_RT_clone_aux1)
+sigs_RT_clone_aux2 <- sigs_RT_clone2
+sigs_RT_clone_aux2$PHASE <- "RT2"
+colnames(sigs_RT_clone_aux2) <- c("num","sig","num2","PHASE")
+sigs_both <- rbind(sigs_both,sigs_RT_clone_aux2)
+sigs_RT_clone_aux3 <- sigs_RT_clone3
+sigs_RT_clone_aux3$PHASE <- "RT3"
+colnames(sigs_RT_clone_aux3) <- c("num","sig","num2","PHASE")
+sigs_both <- rbind(sigs_both,sigs_RT_clone_aux3)
+sigs_RT_clone_aux4 <- sigs_RT_clone4
+sigs_RT_clone_aux4$PHASE <- "RT4"
+colnames(sigs_RT_clone_aux4) <- c("num","sig","num2","PHASE")
+sigs_both <- rbind(sigs_both,sigs_RT_clone_aux4)
+
+gg <- ggplot(data = sigs_both, aes(x = factor(PHASE,levels=c("UCLL","MCLL","RT1","RT2","RT3","RT4")), y = num2,fill=factor(sig,levels=sigs))) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  theme(
+        plot.title = element_text(size = 11.5,hjust = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()
+  ) +
+  scale_fill_manual(values=sigsColors) +
+  scale_y_continuous(labels = scales::percent)+
+  labs(fill = "Signature") + ylab("Relative contribution (%)") + xlab("Summary")
+gg
+
+pdf("outputs/summary_CLL_RT_123_clones_barplot_MM1.NEW.pdf",height=2.8, width=3,useDingbats = F)
+gg
+dev.off()
+```
+
+## Contribution of SBS84 and SBS85 to kataegis SNVs 
+
+### Clustered mutations in RT clones
+
+```{r,fig.height=2.8,fig.width=9}
+muts_cll_clones <- data.frame()
+muts_ucll_clones <- data.frame()
+muts_mcll_clones <- data.frame()
+muts_rs_clones <- data.frame()
+
+for (s in c(cll_samples)){
+  cll <- 1
+  muts_cll_clones <- rbind(muts_cll_clones,muts[muts$SAMPLE==s & muts$CLUSTER==1,])
+  if (s %in% c("365-1951-01TD", "019-05-01TD")){
+    muts_mcll_clones <- rbind(muts_mcll_clones,muts[muts$SAMPLE==s & muts$CLUSTER==1,])
+  } else {
+    muts_ucll_clones <- rbind(muts_ucll_clones,muts[muts$SAMPLE==s & muts$CLUSTER==1,])
+  }
+}
+
+for (s in rs_samples){
+  if (s=="1669-04-01BD"){
+    next
+  }
+  rs <- max(muts$CLUSTER[muts$SAMPLE==s],na.rm = TRUE)
+  if(s=="3299-02-01TD"){
+    rs <- rs - 1
+  }
+  muts_rs_clones <- rbind(muts_rs_clones,muts[muts$SAMPLE==s & muts$CLUSTER == rs,])
+}
+
+kat_cll <- get_kat(muts_cll_clones,6,1000)
+kat_ucll <- get_kat(muts_ucll_clones,6,1000)
+kat_mcll <- get_kat(muts_mcll_clones,6,1000)
+kat_rs <- get_kat(muts_rs_clones,6,1000)
+
+write.table(kat_rs[[2]][,c(1,2,3,4,5,6,7)], "outputs/kataegis_in_RTclones.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+write.table(kat_cll[[2]][,c(1,2,3,4,5,6,7)], "outputs/kataegis_in_CLLclones.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+
+table(kat_ucll[[1]][,c("SAMPLE")])
+table(kat_mcll[[1]][,c("SAMPLE")])
+table(kat_rs[[1]][,c("SAMPLE")])
+
+kat_ucll_muts <- kat_ucll[[1]]
+kat_mcll_muts <- kat_mcll[[1]]
+kat_rs_muts <- kat_rs[[1]]
+
+kat_ucll_plot <- snvsClassification(kat_ucll_muts[,-c(1,2,3)],3,contextColumn="context",mutTypeColumn = "mutType",title="Kataegis clustered SNVs in UCLL clone")
+kat_mcll_plot <- snvsClassification(kat_mcll_muts[,-c(1,2,3)],3,contextColumn="context",mutTypeColumn = "mutType",title="Kataegis clustered SNVs in MCLL clone")
+kat_rs_plot <- snvsClassification(kat_rs_muts[,-c(1,2,3)],3,contextColumn="context",mutTypeColumn = "mutType",title="Kataegis clustered SNVs in RT clone")
+kat_ucll_plot[[2]]
+kat_mcll_plot[[2]]
+kat_rs_plot[[2]]
+
+kat_ucll_muts$SAMPLE2 <- kat_ucll_muts$SAMPLE
+kat_mcll_muts$SAMPLE2 <- kat_mcll_muts$SAMPLE
+kat_rs_muts$SAMPLE2 <- kat_rs_muts$SAMPLE
+kat_ucll_muts$SAMPLE <- "UCLL"
+kat_mcll_muts$SAMPLE <- "MCLL"
+kat_rs_muts$SAMPLE <- "RT"
+
+
+vcfs2 <- makeGRangesFromDataFrame(rbind(kat_ucll_muts,kat_mcll_muts,kat_rs_muts), keep.extra.columns=TRUE, ignore.strand=TRUE,
+                       seqinfo=NULL, seqnames.field="CHROM", start.field="POSITION",
+                       end.field="POSITION", starts.in.df.are.0based=FALSE)
+vcfs2 <- split(vcfs2, as.factor(vcfs2$SAMPLE))
+seqlevelsStyle(vcfs2) <- "UCSC"
+genome(vcfs2) <- "hg19"
+mut_mat_clustered2 <- mut_matrix(vcf_list = vcfs2, ref_genome = ref_genome)
+mut_mat_clustered2 <- mut_mat_clustered2[,c("MCLL","UCLL","RT")]
+```
+
+### ICGC clustered mutations
+
+```{r,fig.height=2.8,fig.width=8}
+kat_ucll_icgc <- get_kat(muts_ICGC[muts_ICGC$CASE %in% meta_ighv$Case[meta_ighv$IGHV_class=="unmutated"]],6,1000)
+kat_mcll_icgc <- get_kat(muts_ICGC[muts_ICGC$CASE %in% meta_ighv$Case[meta_ighv$IGHV_class=="mutated"]],6,1000)
+
+write.table(kat_ucll_icgc[[2]][,c(1,2,3,4,5,6,7)], "outputs/kataegis_in_UCLL_ICGC.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+write.table(kat_mcll_icgc[[2]][,c(1,2,3,4,5,6,7)], "outputs/kataegis_in_MCLL_ICGC.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+
+kat_ucll_icgc_muts <- kat_ucll_icgc[[1]]
+kat_mcll_icgc_muts <- kat_mcll_icgc[[1]]
+
+kat_ucll_icgc_plot <- snvsClassification(kat_ucll_icgc_muts[,-c(1,2)],3,contextColumn="context",mutTypeColumn = "mutType",title="Kataegis clustered SNVs in UCLL ICGC")
+kat_mcll_icgc_plot <- snvsClassification(kat_mcll_icgc_muts[,-c(1,2)],3,contextColumn="context",mutTypeColumn = "mutType",title="Kataegis clustered SNVs in MCLL ICGC")
+kat_ucll_icgc_plot[[2]]
+kat_mcll_icgc_plot[[2]]
+
+kat_ucll_icgc_muts$SAMPLE2 <- kat_ucll_icgc_muts$SAMPLE
+kat_mcll_icgc_muts$SAMPLE2 <- kat_mcll_icgc_muts$SAMPLE
+kat_ucll_icgc_muts$SAMPLE <- as.character(kat_ucll_icgc_muts$SAMPLE)
+kat_mcll_icgc_muts$SAMPLE <- as.character(kat_mcll_icgc_muts$SAMPLE)
+kat_ucll_icgc_muts$SAMPLE <- "UCLLICGC"
+kat_mcll_icgc_muts$SAMPLE <- "MCLLICGC"
+
+# Clustered
+vcfs2 <- makeGRangesFromDataFrame(rbind(kat_ucll_icgc_muts,kat_mcll_icgc_muts), keep.extra.columns=TRUE, ignore.strand=TRUE,
+                       seqinfo=NULL, seqnames.field="CHROM", start.field="POSITION",
+                       end.field="POSITION", starts.in.df.are.0based=FALSE)
+vcfs2 <- split(vcfs2, as.factor(vcfs2$SAMPLE))
+seqlevelsStyle(vcfs2) <- "UCSC"
+genome(vcfs2) <- "hg19"
+mut_mat_clustered2_icgc <- mut_matrix(vcf_list = vcfs2, ref_genome = ref_genome)
+colnames(mut_mat_clustered2_icgc)
+
+mut_mat_clustered_all <- cbind(mut_mat_clustered2_icgc,mut_mat_clustered2)
+colnames(mut_mat_clustered_all)
+
+threshold_add <- 0.05
+threshold <- 0.01
+
+smallContributionMatrix_clustered2_clustonly <- fitting_sigs3(cancer_signatures, threshold, mut_mat_clustered_all, c("SBS84","SBS85"), NULL, threshold_add,NULL,FALSE) 
+
+DT::datatable(smallContributionMatrix_clustered2_clustonly, options = list(scrollX = T, scrollY=T), rownames = F)
+
+write.table(smallContributionMatrix_clustered2_clustonly, "outputs/kataegis_fitting_ALL.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+```
+
+```{r,fig.height=2.8,fig.width=5.5}
+# barplot summary
+m <- smallContributionMatrix_clustered2_clustonly
+
+# Total counts
+m <- as.data.frame(m)
+m$total <- m$SBS84 + m$SBS85
+m$SBS84_perc <- m$SBS84/m$total
+m$SBS85_perc <- m$SBS85/m$total
+
+mm <- melt(m[,c("Case","SBS84_perc","SBS85_perc")])
+colnames(mm) <- c("Case","sig","perc")
+
+gg <- ggplot(data = mm, aes(x = factor(Case,levels=c("MCLLICGC","UCLLICGC","MCLL","UCLL","RT")), y = perc,fill=factor(sig,levels=c("SBS84_perc","SBS85_perc")))) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  theme(
+        plot.title = element_text(size = 11.5,hjust = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()
+  ) +
+  scale_fill_manual(values=c("#FFFAC2","#A4A733")) +
+  scale_y_continuous(labels = scales::percent)+
+  labs(fill = "Signature") + ylab("Relative contribution (%)") + xlab("Summary")
+gg
+
+pdf("outputs/summary_kat_sigs_ICGC_CLL_RT.pdf",height=2.8, width=3,useDingbats = F)
+gg
+dev.off()
+```
+
+```{r,fig.height=5,fig.width=9}
+# Profiles
+mm <- melt(mut_mat_clustered_all)
+colnames(mm) <- c("context","clone","count")
+mm$type <- substr(mm$context,3,5)
+p<-ggplot(data=mm, aes(x=context, y=count, fill=type)) +
+      geom_bar(stat="identity", color="black") + facet_grid(clone~type,scales="free")+ 
+      theme_classic() +
+      theme(legend.position="none", axis.text.x = element_text(angle = 90, hjust = 0, size = 4)) +
+      scale_fill_manual(values=c("#03BCEE", "#010101", "#E32926", "#999999", "#A1CE63", "#EBC6C4")) +
+      ylab("Probability")+xlab("Context")+
+      theme(strip.background = element_blank()) + 
+      geom_hline(aes(yintercept = Inf), color = "white", size=2) + # white space
+      geom_hline(aes(yintercept = Inf, color = type),size = 8)+
+      scale_colour_manual(values=c("#03BCEE", "#010101", "#E32926", "#999999", "#A1CE63", "#EBC6C4")) #+ facet_grid(clone~.)
+p
+
+pdf("outputs/perfils_all.pdf",useDingbats = FALSE,height=5)
+p 
+dev.off()
+```
+
+
+# Session info
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,799 @@
+---
+title: "Mutational signatures extraction"
+author: "Romina Royo & Ferran Nadeu"
+date: "`r format(Sys.time(), '%d/%m/%y')`"
+output:
+  html_document: 
+    theme: paper
+    toc: yes
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+# Settings
+
+## Load libraries
+
+```{r packages,message=FALSE}
+library("BSgenome")
+ref_genome <- "BSgenome.Hsapiens.UCSC.hg19"
+library(ref_genome, character.only = TRUE)
+library("ggplot2")
+library("ggrepel")
+library("gridExtra")
+library("ComplexHeatmap")
+library("circlize")
+library(data.table)
+library(MutationalPatterns)
+library(nnls)
+library(lattice)
+library(lsa)
+library(openxlsx)
+# Custom functions
+source("mut_sigs_functions.R")
+```
+
+
+## Load data
+
+```{r mutmat, cache=TRUE, fig.align='center'}
+# Results
+hdp_all <- fread("supplementary_tables/supplementaryTableX_hdp_extracted_signatures.tsv",header=TRUE)
+sigpro_all <- fread("supplementary_tables/supplementaryTableX_sigpro_extracted_signatures.tsv",header=TRUE)
+siganal_all <- fread("supplementary_tables/supplementaryTableX_siganal_extracted_signatures.tsv",header=TRUE)
+sigfit_all <- fread("supplementary_tables/supplementaryTableX_sigfit_extracted_signatures.tsv",header=TRUE)
+hdp <- hdp_all
+sigpro <- sigpro_all
+siganal <- siganal_all
+sigfit <- sigfit_all
+
+# Mut types order
+mut_types <- fread("additional_data/mutTypes_order.txt",header=FALSE)
+
+# COSMIC
+cancer_signatures <- fread("additional_data/COSMIC_v3.2_SBS_GRCh37.txt", header = T, stringsAsFactors = F)
+cancer_signatures <- cancer_signatures[match(mut_types$V1,cancer_signatures$Type),]
+cancer_signatures <- cancer_signatures[,-c(1)]
+cancer_signatures <- as.data.frame(cancer_signatures)
+
+# SBSA from Kanter et al.
+SBSA <- read.xlsx("additional_data/mmc3-2.xlsx")
+colnames(SBSA) <- c("context","SBSA")
+SBSA$SBSA <- as.numeric(SBSA$SBSA)
+# SBS-MM1 from Rustad et al.
+load(file="additional_data/signature_ref.rda")
+SBSMM1 <- signature_ref[,c("SBS-MM1"),drop=FALSE]
+# SBS signatures from Kucab et al.
+kucab <- fread("additional_data/Mutagen53_sub_signature.txt")
+kucab <- kucab[,-1]
+kucab <- as.data.frame(kucab)
+```
+
+
+# Plot extracted signatures
+
+Plot extracted signatures by each program: hdp, sigprofiler, signatureAnalyzer, sigfit
+
+```{r,fig.width=10}
+# Sigprofiler
+p <- plot_extracted_sigs(sigpro,mut_types$V1,"SigProfiler")
+p
+pdf("outputs/sigprofiler_extracted_signatures.pdf",width = 10,height = 5.8,useDingbats = F)
+p
+dev.off()
+
+# Hdp
+# Plot potential artefacts
+artefacts <- paste0("hdp_",seq(11,ncol(hdp),1))
+hdp <- as.data.frame(hdp)
+p <- plot_extracted_sigs(hdp[,colnames(hdp) %in% artefacts],mut_types$V1,"HDP")
+pdf("outputs/hdp_extracted_signatures_potential_artefacts.pdf",width = 10,height = 5.8,useDingbats = F)
+p
+dev.off()
+# Remove potential artefacts
+hdp <- hdp[,!colnames(hdp) %in% artefacts]
+p <- plot_extracted_sigs(hdp,mut_types$V1,"HDP")
+p
+pdf("outputs/hdp_extracted_signatures.pdf",width = 10,height = 12,useDingbats = F)
+p
+dev.off()
+
+# SignatureAnalyzer
+p <- plot_extracted_sigs(siganal,mut_types$V1,"SignatureAnalyzer")
+p
+pdf("outputs/SignatureAnalyzer_extracted_signatures.pdf",width = 10,height = 8,useDingbats = F)
+p
+dev.off()
+
+# Sigfit
+p <- plot_extracted_sigs(sigfit,mut_types$V1,"sigfit")
+p
+pdf("outputs/sigfit_extracted_signatures.pdf",width = 10,height = 5.8,useDingbats = F)
+p
+dev.off()
+```
+
+
+# Assign and decompose extracted signatures
+
+We assing or deconvolute all extracted signatures into known signatures from COSMIC/PCAWG v3.2 catalogue
+We also compared novel signatures to the compendium of mutational signatures of environmental agents from Kucab et al., and a novel signature from Kanter et al.
+ 
+## Initial considerations
+
+```{r,fig.height=2,fig.width=10}
+# SBS5 composition from hdp extracted signatures: SBS5 was directly extracted by all algorithms except for hdp. However, we identified two signatures that actually compose SBS5
+mod1 <- nnls(as.matrix(hdp[,c("hdp_2","hdp_3")]),cancer_signatures[,c("SBS5")])
+mergesig <- mergeSignature2(as.data.frame(hdp),c("hdp_2","hdp_3"),mod1$x,mut_types$V1,"SBS5=hdp_2+hdp_3")
+mergesig[[2]]
+weights <- paste(round(mod1$x,2),collapse="_")
+weights_norm <- paste(round(mod1$x/sum(mod1$x),2),collapse="_")
+cossim <- round(cosineSimilarity(mergesig[[1]],cancer_signatures[,c("SBS5")]),2)
+print(paste0("hdp2+hdp3 - SBS5 ",weights_norm," ",cossim))
+
+# SBS2 and SBS13 APOBEC-related signatures can be visually recognized in one sample (839-01-01BD). By visual inspection of the extracted signatures, we identified their extraction by hdp and signatureAnalyzer.
+
+## Sample exhibiting APOBEC signatures
+muts <- fread("supplementary_tables/supplementaryTableX_all_wgs_mutations.tsv")
+muts <- muts[muts$TYPE=="SNV",]
+vcfs2 <- makeGRangesFromDataFrame(muts, keep.extra.columns=TRUE, ignore.strand=TRUE,
+                         seqinfo=NULL, seqnames.field="CHROM", start.field="POSITION",
+                         end.field="POSITION", starts.in.df.are.0based=FALSE)
+vcfs2 <- split(vcfs2, as.factor(vcfs2$SAMPLE))
+seqlevelsStyle(vcfs2) <- "UCSC"
+genome(vcfs2) <- "hg19"
+mut_mat <- mut_matrix(vcf_list = vcfs2, ref_genome = ref_genome)
+p <- plotSignature2(mut_mat[,c("839-04-01BD")],"839-04-01BD with APOBEC",mut_types$V1)
+pdf("outputs/839-APOBEC.pdf", height=3, width=10,useDingbats = F)
+p
+dev.off()
+
+## HDP
+mod1 <- nnls(as.matrix(cancer_signatures[,c("SBS2","SBS13")]),hdp$hdp_7)
+mergesig <- mergeSignature2(as.data.frame(cancer_signatures),c("SBS2","SBS13"),mod1$x,mut_types$V1,"hdp_7=SBS2+SBS13")
+mergesig[[2]]
+weights <- paste(round(mod1$x,2),collapse="_")
+weights_norm <- paste(round(mod1$x/sum(mod1$x),2),collapse="_")
+cossim <- round(cosineSimilarity(mergesig[[1]],hdp$hdp_7),2)
+print(paste0("SBS2 + SBS13 - hdp_7 ",weights_norm," ",cossim))
+hdp_assigned <- c("hdp_7")
+
+## SignatureAnalyzer
+mod1 <- nnls(as.matrix(cancer_signatures[,c("SBS2","SBS13","SBS5")]),siganal$siganal_5)
+mergesig <- mergeSignature2(as.data.frame(cancer_signatures),c("SBS2","SBS13","SBS5"),mod1$x,mut_types$V1,"siganal_5=SBS2+SBS13+SBS5")
+mergesig[[2]]
+weights <- paste(round(mod1$x,2),collapse="_")
+weights_norm <- paste(round(mod1$x/sum(mod1$x),2),collapse="_")
+cossim <- round(cosineSimilarity(mergesig[[1]],siganal$siganal_5),2)
+print(paste0("SBS2 + SBS13 + SBS5 - siganal_5 ",weights_norm," ",cossim))
+
+# Recently published SBSA from Kanter et al. corresponds to hdp_9 and siganal_7
+c <- cosineSimilarity(hdp$hdp_9,as.numeric(SBSA$SBSA))
+print(paste0("SBSA - hdp_9, cosine similarity: ",c))
+c <- cosineSimilarity(siganal$siganal_7,as.numeric(SBSA$SBSA))
+print(paste0("SBSA - siganal_7, cosine similarity: ",c))
+
+# Already assigned/decomposed signatures
+hdp_assigned <- c(hdp_assigned,"hdp_2","hdp_3","hdp_9")
+siganal_assigned <- c("siganal_5","siganal_7")
+
+
+# Save SBS-ganciclovir and SBS-RT (see below) to be used by other scripts
+sbsrt <- hdp$hdp_9
+sbsrt <- as.data.frame(sbsrt)
+sbsrt$MutationType <- mut_types$V1
+sbsrt <- sbsrt[,c(2,1)]
+colnames(sbsrt) <- c("MutationType","SBS-ganciclovir")
+sbsrt$`SBS-RT` <- hdp$hdp_10
+write.table(sbsrt,"outputs/SBS-ganciclovir_RT2.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+```
+
+## PCAWG similarities, ONE signature
+
+We compare all extracted signatures to the COSMIC catalogue. If the cosine similarity is greater than 0.85 we assign the corresponding signature.
+
+```{r,fig.width=14}
+assign_to_one_pcawg <- function(signatures,cancer_signatures){
+# Create a table that summarize all cosine similarities for our extracted signatures
+signatures <- as.data.frame(signatures)
+f <- data.frame(matrix(0, ncol=ncol(cancer_signatures), nrow = ncol(signatures)))
+colnames(f) <- colnames(cancer_signatures)
+rownames(f) <- colnames(signatures)
+for (i in 1:ncol(signatures)) {
+  col_sample <- signatures[,i]
+  for (j in 1:ncol(cancer_signatures)) {
+    col_cosmic <- cancer_signatures[,j]
+    c <- cosineSimilarity(col_cosmic,col_sample)
+    f[i,j] <- c
+  }
+}
+
+f[] <- lapply(f,function(x)round(x,2))
+to_rm <- which(is.na(apply(f, 2, function(x) ifelse(max(x, na.rm = TRUE)>0.2,x,NA))))
+f <- f[,-to_rm]
+
+h <- Heatmap(f, col = colorRamp2(c(0, 0.6,1), c("white","white", "red")), rect_gp = gpar(col = "black", lty = 1, lwd = 1), 
+             cluster_rows = FALSE, cluster_columns = FALSE, name = "Cosine",
+             heatmap_legend_param = list(color_bar = "continuous", at = c(0, 0.6,1), labels = c("0","0.6", "1"), legend_height = unit(4, "cm")))
+
+max_cossim <- apply(f,1,function(x) which(x==max(x)))
+
+max_cossim_df <- data.frame()
+for (i in 1:nrow(f)){
+  aux <- data.frame(sig=rownames(f)[i],cosmic_sig=paste(colnames(f)[max_cossim[[i]]],collapse="_OR_"),cossim=paste(f[i,max_cossim[[i]]],collapse="_OR_"))
+  max_cossim_df <- rbind(max_cossim_df,aux)
+}
+
+max_cossim_df
+
+return(list(h,max_cossim_df))
+}
+
+# Remove already decomposed sigs
+siganal <- as.data.frame(siganal)
+rownames(siganal) <- mut_types$V1
+siganal <- siganal[,!colnames(siganal) %in% siganal_assigned]
+
+hdp <- as.data.frame(hdp)
+rownames(hdp) <- mut_types$V1
+hdp <- hdp[,!colnames(hdp) %in% hdp_assigned]
+```
+
+### SignatureAnalyzer
+
+```{r,fig.width=18,fig.height=5}
+res <- assign_to_one_pcawg(siganal,cancer_signatures)
+res[1]
+res[2]
+
+# We assign:
+# siganal_1 - SBS1, 0.94
+# siganal_2 - SBS5, 0.88
+# siganal_3 - SBS9, 0.98
+# siganal_4 - SBS18, 0.89
+# siganal_6 - SBS17b, 0.94
+
+siganal_assigned <- c("siganal_1","siganal_2","siganal_3","siganal_4","siganal_6")
+```
+
+### HDP
+
+```{r,fig.width=18,fig.height=5}
+res <- assign_to_one_pcawg(hdp,cancer_signatures)
+res[1]
+res[2]
+
+# We assign:
+# hdp_1 - SBS1, 0.97
+# hdp_4 - SBS8, 0.86
+# hdp_5 - SBS9, 0.94
+# hdp_6 - SBS18, 0.96
+# hdp_8 - SBS17b, 0.92
+
+hdp_assigned <- c(hdp_assigned,"hdp_1","hdp_4","hdp_5","hdp_6","hdp_8")
+```
+
+### SigProfiler
+
+```{r,fig.width=18,fig.height=4}
+res <- assign_to_one_pcawg(sigpro,cancer_signatures)
+res[1]
+res[2]
+
+# We assign:
+# sigpro_2 - SBS5, 0.9
+# sigpro_3 - SBS9, 0.99
+
+sigpro_assigned <- c("sigpro_2","sigpro_3")
+```
+
+### sigfit
+
+```{r,fig.width=18,fig.height=4}
+res <- assign_to_one_pcawg(sigfit,cancer_signatures)
+res[1]
+res[2]
+
+# We assign:
+# sigfit_2 - SBS5, 0.87
+# sigfit_3 - SBS9, 0.98
+
+sigfit_assigned <- c("sigfit_2","sigfit_3")
+```
+
+## Decompose into N mutational signatures
+
+We decompose the remaining extracted signatures (which could not be previously assigned to one COSMIC mutational signature with a cosine similarity >0.85) into N mutational signatures using an expectation maximization (EM) approach, based on:
+Lee-Six, H., Olafsson, S., Ellis, P. et al. The landscape of somatic mutation in normal colorectal epithelial cells. Nature 574, 532–537 (2019). https://doi-org.sire.ub.edu/10.1038/s41586-019-1672-7
+
+First, we try to deconvolute the remaining signatures into the previously identified signatures. If the cosine similarity between the reconstituted signature and the original one is greater than 0.85, we assign its EM deconvolution.
+
+Next, we try to break down the remaining signatures using all PCAWG signatures. To avoid overfitting, we initially consider PCAWG signatures contributing more than 0.1, as suggested by the authors. If the cosine similarity between the reconstituted signature and the original one is below 0.85, we consider it a novel mutational signature.
+
+We finally show how the addition of the novel signature SBS-RT (selected from hdp for the sake of lesser background noise) can deconvolute the corresponding novel signatures extracted by the other programs (SigProfiler and sigfit) more accurately.
+
+
+
+```{r}
+decompose_into_N_pcawg <- function(signatures,sigs_name,cancer_signatures,pdf_file=NULL){
+
+  sample_list <- colnames(signatures)
+  mutations <- signatures[,sample_list]
+  mutations <- as.data.frame(mutations)
+
+  cancer_signatures_t <- t(cancer_signatures)
+  signatures_names <- rownames(cancer_signatures_t)
+  signature_fraction = array(NA,dim=c(dim(cancer_signatures_t)[1], length(sample_list)))
+  rownames(signature_fraction) = signatures_names
+  colnames(signature_fraction) = sample_list
+  num_signatures = length(signatures_names)
+  maxiter <- 1000
+
+  for (j in 1:length(sample_list)) {
+    mut_freqs = mutations[,j]
+    mut_freqs[is.na(mut_freqs)] = 0
+
+    # EM algowith to estimate the signature contribution
+    alpha = runif(num_signatures); alpha=alpha/sum(alpha) # Random start (seems to give ~identical results)
+    # alpha = rep(1/num_signatures,num_signatures) # Uniform start
+    for (iter in 1:maxiter) {
+      contr = t(array(alpha,dim=c(num_signatures,96))) * t(cancer_signatures_t)
+      probs = contr/array(rowSums(contr),dim=dim(contr))
+      probs = probs * mut_freqs
+      old_alpha = alpha
+      alpha = colSums(probs)/sum(probs)
+      if (sum(abs(alpha-old_alpha))<1e-5) {
+        break
+      }
+    }
+    # Saving the signature contributions for the sample
+    print(j/length(sample_list))
+    signature_fraction[,j] = alpha
+  }
+
+  s <- signature_fraction
+  rownames(s) <- paste0("pcawg_", rownames(s))
+  colnames(s) <- paste0(sigs_name,"_", colnames(s))
+  
+  color.palette = colorRampPalette(c("white", "orange", "purple"))
+  if (ncol(signatures)>1){
+    # print(levelplot((s[dim(s)[1]:1,]),col.regions=color.palette, aspect="fill", scales=list(x=list(rot=90))))
+  }
+
+  signature_fraction_bk <- signature_fraction
+
+  ## Continue...
+  # For each signature, select cancer signatures with contribution > 0.1 and reconstruct original signature.
+  # Now, we only keep cancer_signatures contributing more than > 0.1
+  for (j in 1:length(sample_list)) {
+    constit <- rownames(signature_fraction_bk[signature_fraction_bk[,sample_list[j]]>0.1,,drop=FALSE])
+    constit
+    if (length(constit)>1){
+      gdsigs <- constit
+      sigs <- as.matrix(cancer_signatures[,gdsigs])
+      signatures2 <- t(sigs)
+
+      aa <- sample_list[j]
+      mutations <- signatures[,aa,drop=FALSE]
+      head(mutations)
+      signatures_names <- rownames(signatures2)
+      signature_fraction = array(NA,dim=c(dim(signatures2)[1], 1))
+      rownames(signature_fraction) = signatures_names
+      colnames(signature_fraction) = sample_list[j]
+      num_signatures = length(signatures_names)
+      maxiter <- 1000
+
+      mut_freqs = mutations[[1]]
+      mut_freqs[is.na(mut_freqs)] = 0
+
+      # EM algowith to estimate the signature contribution
+      alpha = runif(num_signatures); alpha=alpha/sum(alpha) # Random start (seems to give ~identical results)
+      # alpha = rep(1/num_signatures,num_signatures) # Uniform start
+      for (iter in 1:maxiter) {
+        contr = t(array(alpha,dim=c(num_signatures,96))) * t(signatures2)
+        probs = contr/array(rowSums(contr),dim=dim(contr))
+        probs = probs * mut_freqs
+        old_alpha = alpha
+        alpha = colSums(probs)/sum(probs)
+        if (sum(abs(alpha-old_alpha))<1e-5) {
+          break
+        }
+      }
+
+      # Saving the signature contributions for the sample
+      signature_fraction[,1] = alpha
+      print(signature_fraction)
+
+      s <- signature_fraction
+      rownames(s) <- paste0("pcawg_", rownames(s))
+      colnames(s) <- paste0(sigs_name,"_", colnames(s))
+      dim(s)
+      reconsbs <- rep(0, 96)
+      for (ct in constit) {
+        reconsbs <- reconsbs + (cancer_signatures[,ct]*s[paste0("pcawg_", ct),paste0(sigs_name,"_",sample_list[j])])
+      }
+      reconsbs
+      sum(reconsbs)
+      cosine(x=reconsbs, y=signatures[[aa]]) # 0.99
+
+      # Plot the original signature broken down into their composite signatures 
+      if (!is.null(pdf_file)){
+        pdf(paste0(pdf_file,"_",sample_list[j],".pdf"),useDingbats = F)
+        par(mfrow=c(6,1))
+        par(mar=c(1,2,4,1))
+        hist.cols <- rep(c("lightblue", "black", "red", "gray", "lightgreen", "lightpink"), each=16)
+        barplot(signatures[[aa]], col=hist.cols, main=paste0(sigs_name,"_",sample_list[j]))
+        barplot(reconsbs, col=hist.cols, main=paste0("Reconstituted ",sigs_name," ",sample_list[j],", cosine similarity to original: ", ... = round(cosine(x=reconsbs, y=signatures[[aa]]), digits=2)))
+        for (ct in constit) {
+          barplot(cancer_signatures[,ct], col=hist.cols, main=paste0("PCAWG ", ct, " accounts for ", round(s[paste0("pcawg_", ct),paste0(sigs_name,"_",sample_list[j])], digits=2)))
+        }
+        dev.off()
+      }
+      par(mfrow=c(5,1))
+      par(mar=c(1,2,4,1))
+      hist.cols <- rep(c("blue", "black", "red", "grey", "green", "pink"), each=16)
+      barplot(signatures[[aa]], col=hist.cols, main=paste0(sigs_name,"_",sample_list[j]))
+      barplot(reconsbs, col=hist.cols, main=paste0("Reconstituted ",sigs_name," ",sample_list[j],", cosine similarity to original: ", ... = round(cosine(x=reconsbs, y=signatures[[aa]]), digits=2)))
+      for (ct in constit) {
+        barplot(cancer_signatures[,ct], col=hist.cols, main=paste0("PCAWG ", ct, " accounts for ", round(s[paste0("pcawg_", ct),paste0(sigs_name,"_",sample_list[j])], digits=2)))
+      }
+    } else {
+      print(paste0("Not enough sigs ",sigs_name,"_",sample_list[j]))
+    }
+  }
+}
+
+# Remove previously decomposed signatures
+siganal <- siganal[,!colnames(siganal) %in% siganal_assigned,drop=FALSE]
+
+hdp <- hdp[,!colnames(hdp) %in% hdp_assigned,drop=FALSE]
+
+sigpro <- as.data.frame(sigpro)
+sigpro <- sigpro[,!colnames(sigpro) %in% sigpro_assigned,drop=FALSE]
+
+sigfit <- as.data.frame(sigfit)
+sigfit <- sigfit[,!colnames(sigfit) %in% sigfit_assigned,drop=FALSE]
+
+# Adding SBS-ganciclovir and SBS-RT to the catalogue for future use
+cancer_signatures2 <- cbind(cancer_signatures,sbsrt[,c(2,3),drop=FALSE])
+```
+
+
+### SignatureAnalyzer
+
+```{r}
+# Using previously identified signatures
+decompose_into_N_pcawg(siganal,"siganal",cancer_signatures2[,c("SBS1","SBS2","SBS5","SBS8","SBS13","SBS18","SBS9","SBS17b","SBS-ganciclovir")])
+
+# Using all PCAWG signatures
+decompose_into_N_pcawg(siganal,"siganal",cancer_signatures)
+
+# We already saw that siganal_8 has a cosine similarity of 0.941 with SBS-RT
+```
+
+### HDP
+
+```{r}
+# Using previously identified signatures
+decompose_into_N_pcawg(hdp,"hdp",cancer_signatures2[,c("SBS1","SBS2","SBS5","SBS8","SBS13","SBS18","SBS9","SBS17b","SBS-ganciclovir")])
+
+# Using all PCAWG signatures
+decompose_into_N_pcawg(hdp,"hdp",cancer_signatures,"outputs/SBS-RT_decompose")
+
+# hdp_10 is considered the novel mutational process: SBS-RT
+```
+
+
+### SigProfiler
+
+```{r}
+# Using previously identified signatures
+decompose_into_N_pcawg(sigpro,"sigpro",cancer_signatures2[,c("SBS1","SBS2","SBS5","SBS8","SBS13","SBS18","SBS9","SBS17b","SBS-ganciclovir")])
+
+# We assign:
+# sigpro_1 - SBS1 + SBS5, 0.98
+# sigpro_4 - SBS5 + SBS8 + SBS18, 0.9
+
+sigpro_assigned <- c(sigpro_assigned,"sigpro_1","sigpro_4")
+sigpro <- sigpro[,!colnames(sigpro) %in% sigpro_assigned,drop=FALSE]
+
+# Using all PCAWG signatures
+decompose_into_N_pcawg(sigpro,"sigpro",cancer_signatures)
+
+# Using all PCAWG signatures + novel SBS-RT
+decompose_into_N_pcawg(sigpro,"sigpro",cancer_signatures2[,c("SBS1","SBS2","SBS5","SBS8","SBS13","SBS18","SBS9","SBS17b","SBS-ganciclovir","SBS-RT")])
+```
+
+### sigfit
+
+```{r}
+# Using previously identified signatures
+decompose_into_N_pcawg(sigfit,"sigfit",cancer_signatures2[,c("SBS1","SBS2","SBS5","SBS8","SBS13","SBS18","SBS9","SBS17b","SBS-ganciclovir")])
+
+# We assign:
+# sigfit_1 - SBS1 + SBS5, 0.98
+# sigfit_4 - SBS5 + SBS8 + SBS18, 0.91
+
+sigfit_assigned <- c(sigfit_assigned,"sigfit_1","sigfit_4")
+sigfit <- sigfit[,!colnames(sigfit) %in% sigfit_assigned,drop=FALSE]
+
+# Using all PCAWG signatures
+decompose_into_N_pcawg(sigfit,"sigfit",cancer_signatures)
+
+# Using all PCAWG signatures + novel SBS-RT
+decompose_into_N_pcawg(sigfit,"sigfit",cancer_signatures2[,c("SBS1","SBS2","SBS5","SBS8","SBS13","SBS18","SBS9","SBS17b","SBS-ganciclovir","SBS-RT")])
+```
+
+
+# SBS-RT signatures
+
+## Comparison of novel signatures extracted by the programs
+
+```{r,fig.width=6,fig.height=4}
+# Comparison of the novel extracted signature 'SBS-ganciclovir' by hdp and signatureAnalyzer.
+hdp_rt1 <- hdp_all$hdp_9
+siganal_rt1 <- siganal_all$siganal_7
+names(hdp_rt1) <- mut_types$V1
+names(siganal_rt1) <- mut_types$V1
+
+pp <- plot_compare_profiles(hdp_rt1,siganal_rt1,condensed = TRUE,profile_ymax=0.1,profile_names = c("hdp_SBS-ganciclovir", "siganal_SBS-ganciclovir"))
+pp
+pdf("outputs/SBS-ganciclovir_compare_hdp_signatureAnalyzer.pdf",width = 10,height = 4,useDingbats = F)
+pp
+dev.off()
+
+# Comparison of the novel extracted signature 'SBS-ganciclovir' by hdp and SBSA from Kucab et al.
+pp <- plot_compare_profiles(hdp_rt1,SBSA$SBSA,condensed = TRUE,profile_ymax=0.1,profile_names = c("hdp_SBS-ganciclovir", "SBSA"))
+pp
+pdf("outputs/SBS-ganciclovir_compare_hdp_SBSA.pdf",width = 10,height = 4,useDingbats = F)
+pp
+dev.off()
+
+# Comparison of the novel extracted signature 'SBS-RT' by hdp and signatureAnalyzer.
+hdp_rt2 <- hdp_all$hdp_10
+siganal_rt2 <- siganal_all$siganal_8
+names(hdp_rt2) <- mut_types$V1
+names(siganal_rt2) <- mut_types$V1
+
+pp <- plot_compare_profiles(hdp_rt2,siganal_rt2,condensed = TRUE,profile_ymax=0.1,profile_names = c("hdp_SBS-RT", "siganal_SBS-RT"))
+pp
+pdf("outputs/SBSRT2_compare_hdp_signatureAnalyzer.pdf",width = 10,height = 4,useDingbats = F)
+pp
+dev.off()
+
+
+
+# Plot SBS-ganciclovir (SBSA) and SBS-RT (unkwown) signatures
+p <- plotSignature2(sbsrt$`SBS-ganciclovir`,"SBS-ganciclovir",mut_types$V1)
+p
+pdf("outputs/SBS-ganciclovir.pdf", height=3, width=10,useDingbats = F)
+p
+dev.off()
+p <- plotSignature2(sbsrt$`SBS-RT`,"SBS-RT",mut_types$V1)
+p
+pdf("outputs/SBS-RT.pdf", height=3, width=10,useDingbats = F)
+p
+dev.off()
+```
+
+## Further comparison of novel SBS-RT with Kucab et al. and additional comparison plots
+
+```{r}
+# Summarize all cosine similarities for SBS-RT and COSMIC
+f <- data.frame(matrix(0, ncol=1, nrow = ncol(cancer_signatures)))
+colnames(f) <- "SBS-RT"
+rownames(f) <- colnames(cancer_signatures)
+col_sample <- sbsrt$`SBS-RT`
+for (j in 1:ncol(cancer_signatures)) {
+    col_cosmic <- cancer_signatures[,j]
+    c <- cosineSimilarity(col_cosmic,col_sample)
+    f[j,1] <- c
+}
+f$sig <- rownames(f)
+
+f_result <- f[,c(2,1)]
+
+f$label <- apply(f,1,function(x) ifelse(x["SBS-RT"] > 0.55,x["sig"],""))
+g <- ggplot(f,aes(x=as.factor(sig),y=`SBS-RT`))+
+  geom_point(color="#73948D") +
+  theme_classic() + ylab("Cosine similarity with SBS-RT") + ylim(0,0.7) +
+  geom_text_repel(aes(label = label),
+                   box.padding   = 0.35,
+                   point.padding = 0.5,
+                   segment.color = 'grey50',
+                   size=3,max.overlaps = 50)+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+# Summarize all cosine similarities for SBS-RT and Kucab et al.
+f <- data.frame(matrix(0, ncol=1, nrow = ncol(kucab)))
+colnames(f) <- "SBS-RT"
+rownames(f) <- colnames(kucab)
+col_sample <- sbsrt$`SBS-RT`
+for (j in 1:ncol(kucab)) {
+    col_cosmic <- kucab[,j]
+    c <- cosineSimilarity(col_cosmic,col_sample)
+    f[j,1] <- c
+}
+f$sig <- rownames(f)
+
+f_result <- rbind(f_result,f)
+
+f$label <- apply(f,1,function(x) ifelse(x["SBS-RT"] > 0.45,x["sig"],""))
+g2 <- ggplot(f,aes(x=as.factor(sig),y=`SBS-RT`))+
+  geom_point(color="#73948D") +
+  theme_classic() + ylab("Cosine similarity with SBS-RT") + ylim(0,0.7) +
+    geom_text_repel(aes(label = label),
+                   box.padding   = 0.35,
+                   point.padding = 0.5,
+                   segment.color = 'grey50',
+                   size=3,max.overlaps = 50)+
+  theme(axis.title =element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+pdf("outputs/SBS-RT_cossim_KucabC.pdf", height=3, width=3,useDingbats = F)
+g2
+dev.off()
+
+grid.arrange(g,g2,ncol=2)
+pdf("outputs/SBS-RT_cossim_COSMIC_KucabC.pdf", height=1.5, width=6.75,useDingbats = F)
+grid.arrange(g,g2,ncol=2)
+dev.off()
+
+write.table(f_result, "outputs/supplementaryTableX_SBS-RT_cossims.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+
+# Decomposition of SBS-RT using COSMIC + Kucab et al.
+decompose_into_N_pcawg(hdp[,c("hdp_10"),drop=FALSE],"SBS-RT",cbind(cancer_signatures,kucab),"outputs/SBS-RT_decompose_COSMIC_Kucab")
+```
+
+# Clustered mutational signatures
+
+## Load data
+```{r}
+# Results
+hdp <- fread("supplementary_tables/supplementaryTableX_hdp_extracted_signatures_CLUSTERED.tsv",header=TRUE)
+sigpro <- fread("supplementary_tables/supplementaryTableX_sigpro_extracted_signatures_CLUSTERED.tsv",header=TRUE)
+siganal <- fread("supplementary_tables/supplementaryTableX_siganal_extracted_signatures_CLUSTERED.tsv",header=TRUE)
+sigfit <- fread("supplementary_tables/supplementaryTableX_sigfit_extracted_signatures_CLUSTERED.tsv",header=TRUE)
+
+# Signatures present genome-wide + clustered mutational signatures known to be present in CLL and our study
+sigs_clust <- c("SBS1", "SBS5", "SBS8", "SBS9", "SBS18", "SBS2", "SBS13", "SBS17b","SBSA","SBS84","SBS85","SBS-ganciclovir","SBS-RT")
+```
+
+## Plot clustered extracted signatures 
+
+Plot clustered extracted signatures by each program: HPD, SigProfiler, SignatureAnalyzer and sigfit
+
+```{r}
+# SigProfiler
+p <- plot_extracted_sigs(sigpro,mut_types$V1,"SigProfiler")
+p
+pdf("outputs/sigprofiler_extracted_signatures_CLUSTERED.pdf",width = 10,height = 4,useDingbats = F)
+p
+dev.off()
+
+# HDP
+# Remove artefacts
+# hdp <- hdp[,!colnames(hdp) %in% artefacts]
+p <- plot_extracted_sigs(hdp,mut_types$V1,"HDP")
+p
+pdf("outputs/hdp_extracted_signatures_CLUSTERED.pdf",width = 10,height = 14,useDingbats = F)
+p
+dev.off()
+
+# SignatureAnalyzer
+p <- plot_extracted_sigs(siganal,mut_types$V1,"SignatureAnalyzer")
+p
+pdf("outputs/SignatureAnalyzer_extracted_signatures_CLUSTERED.pdf",width = 10,height = 4,useDingbats = F)
+p
+dev.off()
+
+# sigfit
+p <- plot_extracted_sigs(sigfit,mut_types$V1,"sigfit")
+p
+pdf("outputs/sigfit_extracted_signatures_CLUSTERED.pdf",width = 10,height = 4,useDingbats = F)
+p
+dev.off()
+```
+
+## Assign and decompose clustered extracted signatures
+
+
+### SignatureAnalyzer
+
+```{r,fig.width=10,fig.height=2}
+res <- assign_to_one_pcawg(siganal,cancer_signatures2[,colnames(cancer_signatures2) %in% sigs_clust])
+res[1]
+res[2]
+
+# We assign:
+# siganal_clust1, SBS84, 0.89
+# siganal_clust2, SBS85, 0.79
+# siganal_clust3, SBS5, 0.82
+
+mod1 <- nnls(as.matrix(cancer_signatures[,c("SBS5","SBS85")]),siganal$siganal_clust2)
+mergesig <- mergeSignature2(as.data.frame(cancer_signatures),c("SBS5","SBS85"),mod1$x,mut_types$V1,"siganal_clust2=SBS5+SBS85")
+mergesig[[2]]
+weights <- paste(round(mod1$x,2),collapse="_")
+weights_norm <- paste(round(mod1$x/sum(mod1$x),2),collapse="_")
+cossim <- round(cosineSimilarity(mergesig[[1]],siganal$siganal_clust2),2)
+print(paste0("SBS5+SBS85 - siganal_clust2 ",weights_norm," ",cossim))
+```
+
+### HDP
+
+```{r,fig.width=10,fig.height=2}
+res <- assign_to_one_pcawg(hdp,cancer_signatures2[,colnames(cancer_signatures2) %in% sigs_clust])
+res[1]
+res[2]
+
+# We assign:
+# hdp_clust1 - SBS84, 0.91
+# hdp_clust2 - SBS85, 0.79
+
+mod1 <- nnls(as.matrix(cancer_signatures[,c("SBS5","SBS85")]),hdp$hdp_clust2)
+mergesig <- mergeSignature2(as.data.frame(cancer_signatures),c("SBS5","SBS85"),mod1$x,mut_types$V1,"hdp_clust2=SBS5+SBS85")
+mergesig[[2]]
+weights <- paste(round(mod1$x,2),collapse="_")
+weights_norm <- paste(round(mod1$x/sum(mod1$x),2),collapse="_")
+cossim <- round(cosineSimilarity(mergesig[[1]],hdp$hdp_clust2),2)
+print(paste0("SBS5+SBS85 - hpd_clust2 ",weights_norm," ",cossim))
+```
+
+### SigProfiler
+
+```{r,fig.width=10,fig.height=2}
+res <- assign_to_one_pcawg(sigpro,cancer_signatures2[,colnames(cancer_signatures2) %in% sigs_clust])
+res[1]
+res[2]
+
+# We assign:
+# sigpro_clust1, SBS84, 0.84
+# sigpro_clust2, SBS85, 0.81
+# sigpro_clust3, SBS5, 0.85
+
+mod1 <- nnls(as.matrix(cancer_signatures[,c("SBS5","SBS85")]),sigpro$sigpro_clust2)
+mergesig <- mergeSignature2(as.data.frame(cancer_signatures),c("SBS5","SBS85"),mod1$x,mut_types$V1,"sigpro_clust2=SBS5+SBS85")
+mergesig[[2]]
+weights <- paste(round(mod1$x,2),collapse="_")
+weights_norm <- paste(round(mod1$x/sum(mod1$x),2),collapse="_")
+cossim <- round(cosineSimilarity(mergesig[[1]],sigpro$sigpro_clust2),2)
+print(paste0("SBS5+SBS85 - sigpro_clust2 ",weights_norm," ",cossim))
+```
+
+### sigfit
+
+```{r,fig.width=10,fig.height=2}
+res <- assign_to_one_pcawg(sigfit,cancer_signatures2[,colnames(cancer_signatures2) %in% sigs_clust])
+res[1]
+res[2]
+
+# We assign:
+# sigfit_clust2 - SBS84, 0.84
+# sigfit_clust3 - SBS85, 0.81
+# sigfit_clust1 - SBS5, 0.87
+
+mod1 <- nnls(as.matrix(cancer_signatures[,c("SBS5","SBS85")]),sigfit$sigfit_clust2)
+mergesig <- mergeSignature2(as.data.frame(cancer_signatures),c("SBS5","SBS85"),mod1$x,mut_types$V1,"sigfit_clust2=SBS5+SBS85")
+mergesig[[2]]
+weights <- paste(round(mod1$x,2),collapse="_")
+weights_norm <- paste(round(mod1$x/sum(mod1$x),2),collapse="_")
+cossim <- round(cosineSimilarity(mergesig[[1]],sigfit$sigfit_clust2),2)
+print(paste0("SBS5+SBS85 - sigpro_clust2 ",weights_norm," ",cossim))
+```
+
+
+
+
+# Session 
+```{r}
+sessionInfo()
+```

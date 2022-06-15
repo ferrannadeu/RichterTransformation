@@ -1,0 +1,1038 @@
+---
+title: "SBS-RT characterization"
+author: "Romina Royo & Ferran Nadeu"
+date: "`r format(Sys.time(), '%d/%m/%y')`"
+output:
+  html_document: 
+    theme: paper
+    toc: yes
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+# Settings 
+
+## Load libraries
+
+```{r packages,message=FALSE}
+library("MutationalPatterns")
+library("ggplot2")
+library(data.table)
+library(sigfit)
+library(gdata)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(tibble)
+library(dplyr)
+library(tidyr)
+library("BSgenome")
+ref_genome <- "BSgenome.Hsapiens.UCSC.hg19"
+library(ref_genome, character.only = TRUE)
+library("MutationalPatterns")
+library("NMF")
+library("gridExtra")
+library("reshape2")
+library("circlize")
+library(RColorBrewer)
+library(lattice)
+library(nnls)
+library(ggrepel)
+library(ComplexHeatmap)
+library(ggpubr)
+library(DT)
+library(openxlsx)
+# Custom functions
+source("mut_sigs_functions.R")
+```
+
+
+## Load data
+
+```{r}
+# SNVs of RT study
+muts <- fread("supplementary_tables/SupplementaryTable3.tsv")
+muts <- muts[muts$TYPE=="SNV"]
+
+# CNA and SV of RS study
+svs <- fread("supplementary_tables/supplementaryTableX_svs.tsv")
+cna <- fread("supplementary_tables/supplementaryTableX_cna.tsv")
+
+print(paste0(length(unique(muts$CASE))," cases, with ",nrow(muts)," SNV, ",nrow(cna)," CNA and ",nrow(svs), " SV"))
+
+# Metadata
+meta <- fread("supplementary_tables/supplementaryTableX_metadata.txt")
+transformed <- c("RT-Plasmablastic","RT-Prolymphocytic","RT-DLBCL")
+meta$VARIANT_CALLING <- unlist(lapply(meta$WGS_WES_SAMPLE, function(x) ifelse(length(muts$VARIANT_CALLING[muts$SAMPLE==x])>1, unique(muts$VARIANT_CALLING[muts$SAMPLE==x]),NA)))
+
+# Sample identifiers 
+cll_samples <- meta$WGS_WES_SAMPLE[startsWith(meta$TIME_POINT,"T1") & meta$DIAGNOSIS=="CLL" & !is.na(meta$VARIANT_CALLING) & meta$VARIANT_CALLING=="Tumor_vs_Normal" & !grepl("_2ndTissue",meta$DISEASE_STAGE)]
+rs_samples <- meta$WGS_WES_SAMPLE[meta$DIAGNOSIS %in% transformed & !is.na(meta$VARIANT_CALLING) & meta$VARIANT_CALLING=="Tumor_vs_Normal" & !grepl("_2ndTissue",meta$DISEASE_STAGE) & meta$DISEASE_STAGE!="RT_2"]
+rs_to_samples <- meta$WGS_WES_SAMPLE[meta$DIAGNOSIS %in% transformed & !is.na(meta$VARIANT_CALLING) & meta$VARIANT_CALLING=="RT_vs_CLL" & !grepl("_2ndTissue",meta$DISEASE_STAGE)]
+
+# RT samples with SBSRT contribution
+rs_contrib <- c("063-08-04BD","365-11-01BD","019-15-01TD","012-19-01TD","3299-02-01TD","1669-04-01BD")
+rs_to_contrib <- c("4686-03-01BD")
+
+# Analysis by CLONE: SNVs in RT clones
+# Tumor_vs_Normal: gather the variants from RT clone (skip case 1669 which has no subclonality analysis, and RT clone in 3299 is second last)
+muts_rsclones <- data.frame()
+for (s in c(rs_samples)){
+  if (s=="1669-04-01BD"){
+    next
+  }
+  rs <- max(muts$CLUSTER[muts$SAMPLE==s],na.rm = TRUE)
+  if (s=="3299-02-01TD"){
+    rs <- rs - 1
+  }
+  muts_rsclones <- rbind(muts_rsclones,muts[muts$SAMPLE==s & muts$CLUSTER == rs,])
+}
+
+# RT_vs_CLL: we consider the detected variants (which are not present in the previous CLL) as the RT clone
+muts_rsclones_to <- data.frame()
+for (s in c(rs_to_samples)){
+  aux <- muts[muts$SAMPLE==s,]
+  aux$CLUSTER <- 2
+  muts_rsclones_to <- rbind(muts_rsclones_to,aux)
+}
+
+muts_rsclones_all <- rbind(muts_rsclones,muts_rsclones_to)
+
+# Mutational signatures fitting results
+fit_clones <- fread("supplementary_tables/supplementaryTableX_signature_contributions_byClone_MM1.tsv")
+fit_samples <- fread("supplementary_tables/supplementaryTableX_signature_contributions_bySample_MM1.tsv")
+
+# Signatures in RT clones
+msigs_RSclone <- data.frame()
+for (s in c(rs_samples)){
+  if (s=="1669-04-01BD"){
+    next
+  }
+  rs <- max(muts$CLUSTER[muts$SAMPLE==s],na.rm = TRUE)
+  if(s=="3299-02-01TD"){
+    rs <- rs - 1
+  }
+  rs <- paste(unique(muts$CASE[muts$SAMPLE==s]),rs,sep="_")
+  msigs_RSclone <- rbind(msigs_RSclone,fit_clones[fit_clones$Case==rs,])
+}
+```
+
+## Mutational signatures
+
+```{r}
+# Mut types order
+mut_types <- fread("additional_data/mutTypes_order.txt",header=FALSE)
+
+# COSMIC
+cancer_signatures <- fread("additional_data/COSMIC_v3.2_SBS_GRCh37.txt", header = T, stringsAsFactors = F)
+cancer_signatures <- cancer_signatures[match(mut_types$V1,cancer_signatures$Type),]
+cancer_signatures <- cancer_signatures[,-c(1)]
+cancer_signatures <- as.data.frame(cancer_signatures)
+
+sbsrs <- fread("supplementary_tables/SBS-ganciclovir_RT2.tsv")
+cancer_signatures <- cbind(cancer_signatures,sbsrs[,c("SBS-ganciclovir")])
+cancer_signatures <- cbind(cancer_signatures,sbsrs[,c("SBS-RT")])
+
+# SBS-melphalan from Rustad et al.
+load(file="additional_data/signature_ref.rda")
+SBSMM1 <- signature_ref[,c("SBS-MM1"),drop=FALSE]
+colnames(SBSMM1) <- c("SBS-melphalan")
+cancer_signatures <- cbind(cancer_signatures,SBSMM1[,c("SBS-melphalan"),drop=FALSE])
+
+# Fitting input thresholds and parameters
+threshold_add <- 0.05
+threshold <- 0.005
+
+# Variables for plots
+all_sigs <- c("SBS1", "SBS5", "SBS8", "SBS9", "SBS18", "SBS2", "SBS13", "SBS17b", "SBS-ganciclovir","SBS-RT", "SBS-melphalan","SBS84", "SBS85" )
+sigs <- c("SBS1", "SBS5", "SBS8", "SBS9", "SBS18", "SBS2", "SBS13", "SBS17b", "SBS-ganciclovir","SBS-RT","SBS-melphalan")
+sigsColors <- c("#CEE8E8", "#C1DCA9", "#ADC2E6", "#FFE426", "#73C09C", "#F8B480", "#A17756", "#F6BDD6","#ED6E19", "#BE1622", "#943E90", "#FFF9C7", "#ADAA16")
+all_sigs2 <- c("SBS1", "SBS5", "SBS8", "SBS9", "SBS18", "SBS-RT", "SBS84", "SBS85" )
+sigsColors2 <- c("#CEE8E8", "#C1DCA9", "#ADC2E6", "#FFE426", "#73C09C", "#BE1622", "#FFF9C7", "#ADAA16")
+```
+
+# Correlations with other signatures and number of alterations
+
+## Number of alterations
+
+Comparison of RT clones with and without SBS-RT
+
+```{r,fig.height=3,fig.width=10}
+msigs_RSclone2 <- msigs_RSclone
+msigs_RSclone2$Nmuts <- unlist(lapply(msigs_RSclone2$Case,function(x) nrow(unique(muts[muts$CASE==strsplit(x,"_")[[1]][1] & muts$CLUSTER==strsplit(x,"_")[[1]][2],c("CHROM","POSITION","REF","ALT")]))))
+
+# 1) RT clones CLL-like
+# 2) RT clones without therapy-related signatures and with APOBEC
+# 3) RT clones with SBS-melphalan
+# 4) RT clones with SBS-RT
+rs_clones1 <- c("1563_3","816_4","3034_3")
+rs_clones2 <- c("839_4")
+rs_clones3 <- c("4675_3","1523_2")
+rs_clones4 <- c("63_4","365_5","12_7","19_5","3299_4")
+msigs_RSclone2$GROUP <- ifelse(msigs_RSclone2$Case %in% rs_clones1,"CLL-like",
+                               ifelse(msigs_RSclone2$Case %in% rs_clones2, "APOBEC",
+                                      ifelse(msigs_RSclone2$Case %in% rs_clones3,"SBS-melphalan",
+                                             ifelse(msigs_RSclone2$Case %in% rs_clones4,"SBS-RT","NA"))))
+msigs_RSclone2$GROUP <- factor(msigs_RSclone2$GROUP,levels=c("CLL-like","APOBEC","SBS-melphalan","SBS-RT"))
+table(msigs_RSclone2$GROUP)
+
+msigs_RSclone2$SAMPLE <- unlist(lapply(msigs_RSclone2$Case, 
+                                       function(x) rs_samples[lapply(rs_samples, 
+                                                                     function(y) as.integer(strsplit(y,"-")[[1]][1]))==strsplit(x,"_")[[1]][1]]))
+msigs_RSclone2$Ncna <- unlist(lapply(msigs_RSclone2$SAMPLE,function(x) nrow(unique(cna[cna$SAMPLE==x, c("CHROM","START","END")]))))
+msigs_RSclone2$Nsvs <- unlist(lapply(msigs_RSclone2$SAMPLE,function(x) nrow(unique(svs[svs$SAMPLE==x, c("CHR1","POS1","STRAND1","CHR2","POS2","STRAND2")]))))
+
+g <- ggplot(msigs_RSclone2,aes(x=GROUP,y=Nmuts)) +
+  geom_boxplot(aes(fill=GROUP),outlier.shape = NA)+ theme_classic()+
+  geom_jitter(aes(fill=GROUP), size=3, pch=21,position=position_jitter(0.2))+
+  scale_color_manual(values=c("#010101","#010101","#010101", "#B4B4B4")) + 
+  scale_fill_manual(values=c("#EDEDED","#EDEDED","#EDEDED", "#CE899A"))
+g <- g + stat_compare_means() + ylim(0,max(msigs_RSclone2$Nmuts+50))
+
+h <- ggplot(msigs_RSclone2,aes(x=GROUP,y=Ncna)) +
+  geom_boxplot(aes(fill=GROUP),outlier.shape = NA)+ theme_classic()+
+  geom_jitter(aes(fill=GROUP), size=3, pch=21,position=position_jitter(0.2))+
+  scale_color_manual(values=c("#010101","#010101","#010101", "#B4B4B4")) + 
+  scale_fill_manual(values=c("#EDEDED","#EDEDED","#EDEDED", "#CE899A"))
+h <- h + stat_compare_means() + ylim(0,max(msigs_RSclone2$Ncna+50))
+
+i <- ggplot(msigs_RSclone2,aes(x=GROUP,y=Nsvs)) +
+  geom_boxplot(aes(fill=GROUP),outlier.shape = NA)+ theme_classic()+
+  geom_jitter(aes(fill=GROUP), size=3, pch=21,position=position_jitter(0.2))+
+  scale_color_manual(values=c("#010101","#010101","#010101", "#B4B4B4")) + 
+  scale_fill_manual(values=c("#EDEDED","#EDEDED","#EDEDED", "#CE899A"))
+i <- i + stat_compare_means() + ylim(0,max(msigs_RSclone2$Nsvs+50))
+
+grid.arrange(g,h,i,nrow=1)
+
+pdf("outputs/correlations_with_without_SBSRT2.pdf",useDingbats = FALSE,height = 6,width = 4)
+grid.arrange(g,h,i,ncol=1)
+dev.off()
+```
+
+## Mutational processes
+
+Comparison of SBS-RT in RT clones vs all other signatures
+
+```{r,fig.width=9,fig.height=3}
+# Other active processes
+msigs_RSclone$Nmuts <- unlist(lapply(msigs_RSclone$Case,function(x) nrow(unique(muts[muts$CASE==strsplit(x,"_")[[1]][1] & muts$CLUSTER==strsplit(x,"_")[[1]][2],c("CHROM","POSITION","REF","ALT")]))))
+
+mall <- melt(msigs_RSclone[,-c("Accuracy")],id.vars="Case")
+mall$`SBS-RT` <- unlist(lapply(mall$Case, function(x) mall$value[mall$Case==x & mall$variable=="SBS-RT"]))
+mall <- mall[!mall$variable=="SBS-RT",]
+
+g <-  ggscatter(mall[mall$`SBS-RT`>0 & mall$value>0 & mall$variable!="SBS18",], x = "value", y = "SBS-RT", 
+                add = "reg.line",  # Add regressin line
+                add.params = list(color = "blue", fill = "lightgray"), # Customize reg. line
+                conf.int = TRUE # Add confidence interval
+)+ stat_cor(method = "pearson", label.y = 1200) + facet_grid(. ~ factor(variable,levels=c("Nmuts","SBS1","SBS5","SBS8")), scales = "free") + theme_classic()
+g
+
+pdf("outputs/correlations_SBSRT2.pdf",useDingbats = FALSE,height = 3.75,width = 8)
+g
+dev.off()
+```
+
+# Transcriptional strand bias
+
+## MutationalPatterns transcriptional strand annotation 
+
+Annotation of strand bias of RT clones (considering RT clone from Tumor_vs_Normal cases, and variants from RT_vs_CLL cases), using MutationalPatterns approach: 
+We consider reference bases for single base substitutions "C" or "T", and when they fall within a gene, we determine if the reference base is on the same strand as the gene definition. Since gene definitions report the coding or sense strand, which is untranscribed, SNVs on the same strand as the gene definitions are considered "untranscribed", while SNVs on the opposite strand are annotated as "transcribed".
+
+```{r,fig.width=22,fig.height=4}
+# Generate GRange list from data in vcf-like format
+sample_list <- list()
+sample_list_to <- list()
+samples <- rs_samples[rs_samples!="1669-04-01BD"] # case 1669 has no subclonal reconstruction...
+samples_to <- rs_to_samples
+rs_contrib_clones <- c(rs_contrib,rs_to_contrib) # samples with SBS-RT exposure in RT clone
+
+# Tumor_vs_Normal
+for(i in (1:length(samples))) {
+  temp <- muts_rsclones[muts_rsclones$SAMPLE== samples[i],]
+  temp$CHROM <- paste0("chr",temp$CHROM)
+  temp_gr <- with(temp,
+                    GRanges(CHROM,
+                            IRanges(start=POSITION, end=POSITION),
+                            REF= REF,
+                            ALT=ALT))
+  genome(temp_gr) <- "hg19"
+  sample_list[[i]]<- (temp_gr)
+}
+
+# RT_vs_CLL
+for(i in (1:length(samples_to))) {
+  temp <- muts_rsclones_to[muts_rsclones_to$SAMPLE== samples_to[i],]
+  temp$CHROM <- paste0("chr",temp$CHROM)
+  temp_gr <- with(temp,
+                    GRanges(CHROM,
+                            IRanges(start=POSITION, end=POSITION),
+                            REF= REF,
+                            ALT=ALT))
+  genome(temp_gr) <- "hg19"
+  sample_list_to[[i]]<- (temp_gr)
+}
+
+# Tumor_vs_Normal + RT_vs_CLL
+sample_list <- c(sample_list,sample_list_to)
+names(sample_list) <- c(samples,samples_to)
+
+# Transcriptional strand annotation
+genes_hg19 <- suppressMessages(GenomicFeatures::genes(TxDb.Hsapiens.UCSC.hg19.knownGene))
+mut_mat_stranded_clones <- MutationalPatterns::mut_matrix_stranded(vcf_list = sample_list,
+                                                              ref_genome = "BSgenome.Hsapiens.UCSC.hg19",
+                                                              ranges = genes_hg19,
+                                                              mode = "transcription")
+
+mut_df_stranded_clones <- as.data.frame(mut_mat_stranded_clones) %>%
+    rownames_to_column(var = "type") %>%
+    melt(id.var = "type", variable.name = 'group', value.name = 'no_mutations') %>%
+    separate(col = 'type', into = c('type', 'strand'), sep = "-")
+
+# Merge variants into:
+# - SBSRT_contrib: all RT clones with SBS-RT exposure 
+# - SBSRT_NOTcontrib: all RT clones without SBS-RT exposure
+# - all: all RT clones
+mut_mat_stranded_clones <- as.data.frame(mut_mat_stranded_clones)
+mut_mat_stranded_clones$SBSRT_contrib <- rowSums(mut_mat_stranded_clones[,colnames(mut_mat_stranded_clones) %in% rs_contrib_clones])
+mut_mat_stranded_clones$all <- rowSums(mut_mat_stranded_clones[,colnames(mut_mat_stranded_clones)!= "1669-04-01BD", colnames(mut_mat_stranded_clones) %in% c(rs_samples,rs_to_samples)])
+mut_mat_stranded_clones$SBSRT_NOTcontrib <- rowSums(mut_mat_stranded_clones[,!colnames(mut_mat_stranded_clones) %in% c(rs_contrib_clones,"all","SBSRT_contrib","SBSRT_NOTcontrib")])
+
+# Visualization from sigfit
+new_mut_mat <- rbind(mut_mat_stranded_clones[grepl("-transcribed",rownames(mut_mat_stranded_clones)),],mut_mat_stranded_clones[grepl("-untranscribed",rownames(mut_mat_stranded_clones)),])
+```
+
+## Testing transcriptional strand bias of SBS-RT
+
+Test of all 96 mutation types to examine SBS-RT peaks
+
+```{r,fig.width=22,fig.height=4}
+# Only samples with SBS-RT signature
+mut_rs <- mut_df_stranded_clones %>%
+  filter(group %in% c(rs_contrib,rs_to_contrib)) %>%
+  # filter(type %in% rs) %>%
+  dplyr::group_by(type, strand) %>%
+  dplyr::summarise(count = sum(no_mutations)) %>%
+  as.data.frame() %>%
+  dcast(type ~ strand, value.var = "count") %>%
+  rowwise() %>%
+  dplyr::mutate(ratio = transcribed/untranscribed) %>%
+  as.data.frame()
+
+# Applying the same poisson test as the strand_bias_test function to each SNV type 
+p_poisson <- list()
+for(i in 1:nrow(mut_rs)){
+  transcribed <- mut_rs[i,"transcribed"]
+  untranscribed <- mut_rs[i,"untranscribed"]
+  pval <- poisson.test(c(transcribed, untranscribed), r = 1)$p.value
+  p_poisson[[i]] <- ifelse(is.numeric(pval), pval, NA)
+}
+
+mut_rs$p_poisson <- unlist(p_poisson)
+mut_rs <- dplyr::mutate(mut_rs, RS_flag = ifelse(p_poisson < 0.05 & ratio > 1, "*", ""))
+
+mut_rs$p_adj <- p.adjust(mut_rs$p_poisson,method="fdr")
+mut_rs <- dplyr::mutate(mut_rs, RS_flag_adj = ifelse(p_adj < 0.05 & ratio > 1, "*", ""))
+
+write.table(mut_rs,"outputs/strandbias_rscontrib.tsv",quote=FALSE,row.names = FALSE,col.names = TRUE,sep="\t")
+
+DT::datatable(mut_rs, options = list(scrollX = T, scrollY=T), rownames = F)
+
+
+plot_spectrum(t(new_mut_mat[,"SBSRT_contrib"]), name = "Simulated counts")
+
+pdf("outputs/strandbias.pdf",useDingbats = FALSE,width=22,height=4.5)
+plot_spectrum(t(new_mut_mat[,"SBSRT_contrib"]), name = "Simulated counts")
+dev.off()
+```
+
+# Replication strand bias
+
+## MutationalPatterns replication strand annotation
+
+```{r,fig.width=20,fig.height=6}
+# Generate GRange list from data in vcf-like format
+sample_list <- list()
+sample_list_to <- list()
+samples <- rs_samples[rs_samples!="1669-04-01BD"] # case 1669 has no subclonal reconstruction...
+samples_to <- rs_to_samples
+rs_contrib_clones <- c(rs_contrib,rs_to_contrib) # samples with SBSRS exposure in RS clone
+
+# Tumor_vs_Normal
+for(i in (1:length(samples))) {
+  temp <- muts_rsclones[muts_rsclones$SAMPLE== samples[i],]
+  temp$CHROM <- paste0("chr",temp$CHROM)
+  temp_gr <- with(temp,
+                    GRanges(CHROM,
+                            IRanges(start=POSITION, end=POSITION),
+                            REF= REF,
+                            ALT=ALT))
+  genome(temp_gr) <- "hg19"
+  sample_list[[i]]<- (temp_gr)
+}
+
+# RT_vs_CLL
+for(i in (1:length(samples_to))) {
+  temp <- muts_rsclones_to[muts_rsclones_to$SAMPLE== samples_to[i],]
+  temp$CHROM <- paste0("chr",temp$CHROM)
+  temp_gr <- with(temp,
+                    GRanges(CHROM,
+                            IRanges(start=POSITION, end=POSITION),
+                            REF= REF,
+                            ALT=ALT))
+  genome(temp_gr) <- "hg19"
+  sample_list_to[[i]]<- (temp_gr)
+}
+
+# Tumor_vs_Normal + RT_vs_CLL
+sample_list <- c(sample_list,sample_list_to)
+names(sample_list) <- c(samples,samples_to)
+
+# Replication strand annotation
+repli_strand <- read.table("supplementary_tables/AsymTools_hg19_bed_like_left_right.tsv", header = TRUE)
+# Store in GRanges object
+repli_strand_granges <- GRanges(
+  seqnames = repli_strand$chr,
+  ranges = IRanges(
+    start = repli_strand$pos,
+    end = repli_strand$end
+  ),
+  strand_info = repli_strand$strand
+)
+seqlevelsStyle(repli_strand_granges) <- "UCSC"
+repli_strand_granges$strand_info <- factor(repli_strand_granges$strand_info,
+  levels = c("right", "left")
+)
+
+mut_mat_s_rep <- mut_matrix_stranded(vcf_list = sample_list, ref_genome = "BSgenome.Hsapiens.UCSC.hg19", repli_strand_granges,
+  mode = "replication"
+)
+
+mut_df_s_rep <- as.data.frame(mut_mat_s_rep) %>%
+    rownames_to_column(var = "type") %>%
+    melt(id.var = "type", variable.name = 'group', value.name = 'no_mutations') %>%
+    separate(col = 'type', into = c('type', 'strand'), sep = "-")
+
+# Merge variants into:
+# - SBSRT_contrib: all RT clones with SBS-RT exposure 
+# - SBSRT_NOTcontrib: all RT clones without SBS-RT exposure
+# - all: all RT clones
+mut_mat_rep_stranded_clones <- as.data.frame(mut_mat_s_rep)
+mut_mat_rep_stranded_clones$SBSRT_contrib <- rowSums(mut_mat_rep_stranded_clones[,colnames(mut_mat_rep_stranded_clones) %in% rs_contrib_clones])
+mut_mat_rep_stranded_clones$all <- rowSums(mut_mat_rep_stranded_clones[,colnames(mut_mat_rep_stranded_clones) %in% c(rs_samples,rs_to_samples)])
+mut_mat_rep_stranded_clones$SBSRT_NOTcontrib <- rowSums(mut_mat_rep_stranded_clones[,!colnames(mut_mat_rep_stranded_clones) %in% c(rs_contrib_clones,"all","SBSRT_contrib","SBSRT_NOTcontrib")])
+
+# Visualization from sigfit
+new_mut_mat <- rbind(mut_mat_rep_stranded_clones[grepl("-left",rownames(mut_mat_rep_stranded_clones)),],mut_mat_rep_stranded_clones[grepl("-right",rownames(mut_mat_rep_stranded_clones)),])
+```
+
+## Replication strand bias test in RT clones
+
+```{r,fig.width=22,fig.height=4}
+# Only clones with SBS-RT signature
+mut_rs <- mut_df_s_rep %>%
+  filter(group %in% c(rs_contrib,rs_to_contrib)) %>%
+  # filter(type %in% rs) %>%
+  dplyr::group_by(type, strand) %>%
+  dplyr::summarise(count = sum(no_mutations)) %>%
+  as.data.frame() %>%
+  dcast(type ~ strand, value.var = "count") %>%
+  rowwise() %>%
+  dplyr::mutate(ratio = left/right) %>%
+  as.data.frame()
+
+# Applying the same poisson test as the strand_bias_test function to each SNV type 
+p_poisson <- list()
+for(i in 1:nrow(mut_rs)){
+  rleft <- mut_rs[i,"left"]
+  rright <- mut_rs[i,"right"]
+  pval <- poisson.test(c(rleft, rright), r = 1)$p.value
+  p_poisson[[i]] <- ifelse(is.numeric(pval), pval, NA)
+}
+
+mut_rs$p_poisson <- unlist(p_poisson)
+mut_rs <- dplyr::mutate(mut_rs, RS_flag = ifelse(p_poisson < 0.05 & ratio > 1, "*", ""))
+
+mut_rs$p_adj <- p.adjust(mut_rs$p_poisson,method="fdr")
+mut_rs <- dplyr::mutate(mut_rs, RS_flag_adj = ifelse(p_adj < 0.05 & ratio > 1, "*", ""))
+
+mut_rs[mut_rs$RS_flag_adj=="*",]
+
+write.table(mut_rs,"outputs/replicationbias_rscontrib.tsv",quote=FALSE,row.names = FALSE,col.names = TRUE,sep="\t")
+
+DT::datatable(mut_rs, options = list(scrollX = T, scrollY=T), rownames = F)
+
+plot_spectrum(t(new_mut_mat[,"SBSRT_contrib"]), name = "Replication strand bias in SBSRT contrib")
+
+pdf("outputs/replicationdbias.pdf",useDingbats = FALSE,width=22,height=4.5)
+plot_spectrum(t(new_mut_mat[,"SBSRT_contrib"]), name = "Replication strand bias in SBSRT contrib")
+dev.off()
+```
+
+# SBS-RT in chromatin states
+
+Activity of mutational processes on specific chromatin states (we consider RT-specific mutations)
+
+## Chromatin states annotation
+
+```{r}
+# Annotate context
+out <- snvsClassification(muts[,c("CHROM","POSITION","REF","ALT")], title = "RS Study")
+muts <- cbind(muts, out[[1]][,5:6])
+
+# Load chrom states RData
+load("additional_data/gr_chrom_states.RData")
+chrom_states.gr <- bb.gr
+
+# Classify muts into 4 chrom states
+muts$seqname <- paste0("chr",muts$CHROM)
+muts$mut <- paste(muts$CHROM,muts$POSITION,muts$REF,muts$ALT,sep="_")
+muts.gr <- makeGRangesFromDataFrame(muts, keep.extra.columns = FALSE, start.field="POSITION",end.field="POSITION",seqnames.field="seqname",ignore.strand=TRUE)
+hits <- findOverlaps(muts.gr, 
+                     chrom_states.gr[!is.na(chrom_states.gr$tag_consensus) & chrom_states.gr$tag_consensus=="Heterochromatin"])
+muts_heterochromatin <- unique(muts[queryHits(hits)])
+hits <- findOverlaps(muts.gr, 
+                     chrom_states.gr[!is.na(chrom_states.gr$tag_consensus) & chrom_states.gr$tag_consensus=="Transcription"])
+muts_transcription <- unique(muts[queryHits(hits)])
+hits <- findOverlaps(muts.gr, 
+                     chrom_states.gr[!is.na(chrom_states.gr$tag_consensus) & chrom_states.gr$tag_consensus=="EnhancerPromoter"])
+muts_enhancerPromoter <- unique(muts[queryHits(hits)])
+hits <- findOverlaps(muts.gr, 
+                     chrom_states.gr[!is.na(chrom_states.gr$tag_consensus) & chrom_states.gr$tag_consensus=="Polycom"])
+muts_polycomb <- unique(muts[queryHits(hits)])
+
+muts$CSTATE <- ifelse(muts$mut %in% muts_heterochromatin$mut, "Heterochromatin",
+                      ifelse(muts$mut %in% muts_enhancerPromoter$mut, "EnhancerPromoter",
+                             ifelse(muts$mut %in% muts_transcription$mut, "Transcription",
+                                    ifelse(muts$mut %in% muts_polycomb$mut, "Polycomb", NA))))
+
+# Mutational signatures identified in CLL and RT clones
+muts_cstates_clones <- data.frame()
+aux_sigs_list_cstates_MUT <- list()
+aux_sigs_list_cstates_UMUT <- list()
+sigs_list_cstates_MUT <- list()
+sigs_list_cstates_UMUT <- list()
+
+# Tumor_vs_Normal CLL clone
+for (s in c(cll_samples)){
+  cll <- 1
+  muts_cstates_clones <- rbind(muts_cstates_clones,muts[muts$SAMPLE==s & muts$CLUSTER==cll,])
+  donor <- as.numeric(strsplit(s,"-")[[1]][1])
+  clone_id <- paste(donor,cll,sep="_")
+  sdb <- fit_clones[fit_clones$Case==clone_id,3:ncol(fit_clones)]
+  if (donor %in% meta$CASE[meta$IGHV=="U-IGHV"]){
+    aux_sigs_list_cstates_UMUT[[clone_id]] <- names(colSums(sdb)[colSums(sdb) > 0])
+  } else {
+    aux_sigs_list_cstates_MUT[[clone_id]] <- names(colSums(sdb)[colSums(sdb) > 0])
+  }
+}
+sigs_list_cstates_MUT[["CLLcloneHet"]] <- c("SBS84","SBS85",unique(unlist(aux_sigs_list_cstates_MUT)))
+sigs_list_cstates_MUT[["CLLcloneEP"]] <- c("SBS84","SBS85",unique(unlist(aux_sigs_list_cstates_MUT)))
+sigs_list_cstates_MUT[["CLLcloneTra"]] <- c("SBS84","SBS85",unique(unlist(aux_sigs_list_cstates_MUT)))
+sigs_list_cstates_MUT[["CLLclonePol"]] <- c("SBS84","SBS85",unique(unlist(aux_sigs_list_cstates_MUT)))
+
+sigs_list_cstates_UMUT[["CLLcloneHet"]] <- c("SBS84",unique(unlist(aux_sigs_list_cstates_UMUT)))
+sigs_list_cstates_UMUT[["CLLcloneEP"]] <- c("SBS84",unique(unlist(aux_sigs_list_cstates_UMUT)))
+sigs_list_cstates_UMUT[["CLLcloneTra"]] <- c("SBS84",unique(unlist(aux_sigs_list_cstates_UMUT)))
+sigs_list_cstates_UMUT[["CLLclonePol"]] <- c("SBS84",unique(unlist(aux_sigs_list_cstates_UMUT)))
+
+# Tumor_vs_Normal RT clone
+aux_sigs_list_cstates_MUT <- list()
+aux_sigs_list_cstates_UMUT <- list()
+for (s in c(rs_samples)){
+  if (s=="1669-04-01BD"){
+    next
+  }
+  rs <- max(muts$CLUSTER[muts$SAMPLE==s],na.rm = TRUE)
+  if(s=="3299-02-01TD"){
+    rs <- rs - 1
+  }
+  muts_cstates_clones <- rbind(muts_cstates_clones,muts[muts$SAMPLE==s & muts$CLUSTER == rs,])
+  donor <- as.numeric(strsplit(s,"-")[[1]][1])
+  clone_id <- paste(donor,rs,sep="_")
+  sdb <- fit_clones[fit_clones$Case==clone_id,3:ncol(fit_clones)]
+  if (donor %in% meta$CASE[meta$IGHV=="U-IGHV"]){
+    aux_sigs_list_cstates_UMUT[[clone_id]] <- names(colSums(sdb)[colSums(sdb) > 0])
+  } else {
+    aux_sigs_list_cstates_MUT[[clone_id]] <- names(colSums(sdb)[colSums(sdb) > 0])
+  }
+}
+sigs_list_cstates_MUT[["RScloneHet"]] <- unique(unlist(aux_sigs_list_cstates_MUT))
+sigs_list_cstates_MUT[["RScloneEP"]] <- unique(unlist(aux_sigs_list_cstates_MUT))
+sigs_list_cstates_MUT[["RScloneTra"]] <- unique(unlist(aux_sigs_list_cstates_MUT))
+sigs_list_cstates_MUT[["RSclonePol"]] <- unique(unlist(aux_sigs_list_cstates_MUT))
+
+sigs_list_cstates_UMUT[["RScloneHet"]] <- unique(unlist(aux_sigs_list_cstates_UMUT))
+sigs_list_cstates_UMUT[["RScloneEP"]] <- unique(unlist(aux_sigs_list_cstates_UMUT))
+sigs_list_cstates_UMUT[["RScloneTra"]] <- unique(unlist(aux_sigs_list_cstates_UMUT))
+sigs_list_cstates_UMUT[["RSclonePol"]] <- unique(unlist(aux_sigs_list_cstates_UMUT))
+
+# Adding tumor-only samples as "RT clone"
+tumorOnlyMutsToAdd <- muts[muts$SAMPLE %in% rs_to_samples,]
+tumorOnlyMutsToAdd$CLUSTER <- 2
+muts_cstates_clones <- rbind(muts_cstates_clones, tumorOnlyMutsToAdd)
+rs_samples_and_rs_to_samples <- c(rs_samples, rs_to_samples)
+
+aux_sigs_list_cstates_MUT <- list()
+aux_sigs_list_cstates_UMUT <- list()
+for (s in c(rs_to_samples)){
+  donor <- as.numeric(strsplit(s,"-")[[1]][1])
+  sdb <- fit_samples[fit_samples$Case==s,3:ncol(fit_samples)]
+  if (donor %in% meta$CASE[meta$IGHV=="U-IGHV"]){
+    aux_sigs_list_cstates_UMUT[[as.character(donor)]] <- names(colSums(sdb)[colSums(sdb) > 0])
+  } else {
+    aux_sigs_list_cstates_MUT[[as.character(donor)]] <- names(colSums(sdb)[colSums(sdb) > 0])
+  }
+}
+
+# Adding clustered mutations previously identified in CLL/RT clones
+sigs_list_cstates_UMUT[["RScloneHet"]] <- unique(c("SBS84",sigs_list_cstates_UMUT[["RScloneHet"]],unique(unlist(aux_sigs_list_cstates_UMUT))))
+sigs_list_cstates_UMUT[["RScloneEP"]] <- unique(c("SBS84",sigs_list_cstates_UMUT[["RScloneHet"]],unique(unlist(aux_sigs_list_cstates_UMUT))))
+sigs_list_cstates_UMUT[["RScloneTra"]] <- unique(c("SBS84",sigs_list_cstates_UMUT[["RScloneHet"]],unique(unlist(aux_sigs_list_cstates_UMUT))))
+sigs_list_cstates_UMUT[["RSclonePol"]] <- unique(c("SBS84",sigs_list_cstates_UMUT[["RScloneHet"]],unique(unlist(aux_sigs_list_cstates_UMUT))))
+
+sigs_list_cstates_MUT[["RScloneHet"]] <- unique(c("SBS84",sigs_list_cstates_MUT[["RScloneHet"]],unique(unlist(aux_sigs_list_cstates_MUT))))
+sigs_list_cstates_MUT[["RScloneEP"]] <- unique(c("SBS84",sigs_list_cstates_MUT[["RScloneHet"]],unique(unlist(aux_sigs_list_cstates_MUT))))
+sigs_list_cstates_MUT[["RScloneTra"]] <- unique(c("SBS84",sigs_list_cstates_MUT[["RScloneHet"]],unique(unlist(aux_sigs_list_cstates_MUT))))
+sigs_list_cstates_MUT[["RSclonePol"]] <- unique(c("SBS84",sigs_list_cstates_MUT[["RScloneHet"]],unique(unlist(aux_sigs_list_cstates_MUT))))
+
+# Labelling mutations in chrom. states in CLL and RT clones
+muts_cstates_clones$NEW_SAMPLE <- ifelse(muts_cstates_clones$CSTATE=="Heterochromatin" & muts_cstates_clones$SAMPLE %in% cll_samples, "CLLcloneHet",
+                                  ifelse(muts_cstates_clones$CSTATE=="Heterochromatin" & muts_cstates_clones$SAMPLE %in% rs_samples_and_rs_to_samples, "RScloneHet",
+                                         ifelse(muts_cstates_clones$CSTATE=="EnhancerPromoter" & muts_cstates_clones$SAMPLE %in% cll_samples, "CLLcloneEP",
+                                                ifelse(muts_cstates_clones$CSTATE=="EnhancerPromoter" & muts_cstates_clones$SAMPLE %in% rs_samples_and_rs_to_samples, "RScloneEP",
+                                                       ifelse(muts_cstates_clones$CSTATE=="Transcription" & muts_cstates_clones$SAMPLE %in% cll_samples, "CLLcloneTra",
+                                                              ifelse(muts_cstates_clones$CSTATE=="Transcription" & muts_cstates_clones$SAMPLE %in% rs_samples_and_rs_to_samples, "RScloneTra",
+                                                                     ifelse(muts_cstates_clones$CSTATE=="Polycomb" & muts_cstates_clones$SAMPLE %in% cll_samples, "CLLclonePol",
+                                                                            ifelse(muts_cstates_clones$CSTATE=="Polycomb" & muts_cstates_clones$SAMPLE %in% rs_samples_and_rs_to_samples, "RSclonePol",NA))))))))
+
+vcfs2 <- makeGRangesFromDataFrame(muts_cstates_clones[muts_cstates_clones$CASE %in% meta$CASE[meta$IGHV=="U-IGHV"]], keep.extra.columns=TRUE, ignore.strand=TRUE,
+                       seqinfo=NULL, seqnames.field="CHROM", start.field="POSITION",
+                       end.field="POSITION", starts.in.df.are.0based=FALSE)
+vcfs2 <- split(vcfs2, as.factor(vcfs2$NEW_SAMPLE))
+seqlevelsStyle(vcfs2) <- "UCSC"
+genome(vcfs2) <- "hg19"
+mut_mat_cstates_clones_UMUT <- mut_matrix(vcf_list = vcfs2, ref_genome = ref_genome)
+
+vcfs2 <- makeGRangesFromDataFrame(muts_cstates_clones[muts_cstates_clones$CASE %in% meta$CASE[meta$IGHV=="M-IGHV"]], keep.extra.columns=TRUE, ignore.strand=TRUE,
+                       seqinfo=NULL, seqnames.field="CHROM", start.field="POSITION",
+                       end.field="POSITION", starts.in.df.are.0based=FALSE)
+vcfs2 <- split(vcfs2, as.factor(vcfs2$NEW_SAMPLE))
+seqlevelsStyle(vcfs2) <- "UCSC"
+genome(vcfs2) <- "hg19"
+mut_mat_cstates_clones_MUT <- mut_matrix(vcf_list = vcfs2, ref_genome = ref_genome)
+```
+
+## Mutational signatures analysis
+
+```{r, fig.width=8,fig.height=4}
+smallContributionMatrix_UMUT <- fitting_sigs3(cancer_signatures, threshold, mut_mat_cstates_clones_UMUT, all_sigs2, sigs_list_cstates_UMUT, threshold_add)
+write.table(smallContributionMatrix_UMUT, "outputs/signature_contributions_byCLONE_CSTATES_UMUT.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+
+s <- smallContributionMatrix_UMUT[, -2]
+sM <- melt(s,id.vars = "Case")
+orderCases <- s$Case
+sM$Case <- factor(sM$Case, levels = orderCases)
+sM <- sM[sM$value > 0, ]
+colnames(sM) <- c("Case", "Signature", "Contribution")
+
+sM$Signature <- factor(sM$Signature, levels = all_sigs2)
+sM$IGHV <- "UMUT"
+sMcorr <- sM
+for (c in unique(sMcorr$Case)){
+  sMcorr$Contribution[sMcorr$Case==c] = sMcorr$Contribution[sMcorr$Case==c] / sum(sMcorr[sMcorr$Case==c,c("Contribution")])
+}
+sMcorr$Contribution <- sMcorr$Contribution * 100
+# Add total number of mutations
+nmuts <- colSums(mut_mat_cstates_clones_UMUT)
+plot.labels <- data.frame(Case=levels(sMcorr$Case),nmuts=nmuts)
+plot.labels$IGHV <- "UMUT"
+
+sM_all <- sMcorr
+plot.labels_all <- plot.labels
+
+smallContributionMatrix_MUT <- fitting_sigs3(cancer_signatures, threshold, mut_mat_cstates_clones_MUT, all_sigs2, sigs_list_cstates_MUT, threshold_add)
+write.table(smallContributionMatrix_MUT, "outputs/signature_contributions_byCLONE_CSTATES_MUT.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+
+s <- smallContributionMatrix_MUT[, -2]
+sM <- melt(s,id.vars = "Case")
+orderCases <- s$Case
+sM$Case <- factor(sM$Case, levels = orderCases)
+sM <- sM[sM$value > 0, ]
+colnames(sM) <- c("Case", "Signature", "Contribution")
+sM$Signature <- factor(sM$Signature, levels = all_sigs2)
+sM$IGHV <- "MUT"
+sMcorr <- sM
+for (c in unique(sMcorr$Case)){
+  sMcorr$Contribution[sMcorr$Case==c] = sMcorr$Contribution[sMcorr$Case==c] / sum(sMcorr[sMcorr$Case==c,c("Contribution")])
+}
+sMcorr$Contribution <- sMcorr$Contribution * 100
+nmuts <- colSums(mut_mat_cstates_clones_MUT)
+plot.labels <- data.frame(Case=levels(sMcorr$Case),nmuts=nmuts)
+plot.labels$IGHV <- "MUT"
+
+sM_all <- rbind(sM_all,sMcorr)
+plot.labels_all <- rbind(plot.labels_all,plot.labels)
+plot.labels_all$Accuracy[plot.labels_all$IGHV=="MUT"] <- smallContributionMatrix_MUT$Accuracy
+plot.labels_all$Accuracy[plot.labels_all$IGHV=="UMUT"] <- smallContributionMatrix_UMUT$Accuracy
+plot.labels_all$label <- paste0(plot.labels_all$nmuts," (",plot.labels_all$Accuracy,")")
+
+# Set order Het Pol EP Tra
+newOrder <- c("CLLcloneHet","CLLclonePol","CLLcloneEP","CLLcloneTra","RScloneHet","RSclonePol","RScloneEP","RScloneTra")
+p<-ggplot() + 
+  geom_bar(data=sM_all, aes(x=factor(Case,levels=newOrder), y=Contribution, fill=Signature),stat="identity", col="black") + theme_classic() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5, size = 8)) + scale_fill_manual(values=sigsColors2) + xlab("Case")+
+  theme(
+    strip.background = element_blank(),
+    strip.placement = "outside",
+    strip.text.x = element_text(face="bold")
+  ) + facet_wrap(.~IGHV,nrow = 2)  + 
+  geom_text(data=plot.labels_all,aes(x=Case,y=105,label = label), nudge_y = 4, size=3) +   
+  ylim(0,110)+scale_y_continuous(breaks=c(0,25,50,75,100))
+
+p
+
+pdf("outputs/sigs_contrib_byClone_CSTATES_corrPerc_MUT_UMUT_0.005_v2.pdf",height = 6,width = 10, useDingbats = F)
+p
+dev.off()
+```
+
+## Enrichment of SBS-RT observed vs expected
+
+```{r, fig.width=3,fig.height=3}
+# Total bases in chrom states
+het <- sum(width(reduce(chrom_states.gr[!is.na(chrom_states.gr$tag_consensus) & chrom_states.gr$tag_consensus=="Heterochromatin"])))/1000000
+tra <- sum(width(reduce(chrom_states.gr[!is.na(chrom_states.gr$tag_consensus) & chrom_states.gr$tag_consensus=="Transcription"])))/1000000 
+pol <- sum(width(reduce(chrom_states.gr[!is.na(chrom_states.gr$tag_consensus) & chrom_states.gr$tag_consensus=="Polycom"])))/1000000 
+ep <- sum(width(reduce(chrom_states.gr[!is.na(chrom_states.gr$tag_consensus) & chrom_states.gr$tag_consensus=="EnhancerPromoter"])))/1000000 
+
+df <- data.frame(CSTATE=c("EP","Het","Pol","Tra"),nbases=c(ep*1000000,het*1000000,pol*1000000,tra*1000000),
+                 mb=c(ep,het,pol,tra))
+
+# Get percentage of each chrom state
+total <- sum(df$nbases)
+df$expected_perc <- unlist(lapply(df$nbases, function(x) 100*(x/total) ))
+
+# Number of muts assigned to SBS-RT
+rs_mut <- sum(smallContributionMatrix_MUT[,"SBS-RT"])
+rs_umut <- sum(smallContributionMatrix_UMUT[,"SBS-RT"])
+
+# Get percentage of muts assigned to SBSRS of each chrom state
+df$SBSRS_MUT <- smallContributionMatrix_MUT[c(5,6,7,8),"SBS-RT"]
+df$SBSRS_MUT_perc <- 100*df$SBSRS_MUT/rs_mut
+df$SBSRS_UMUT <- smallContributionMatrix_UMUT[c(5,6,7,8),"SBS-RT"]
+df$SBSRS_UMUT_perc <- 100*df$SBSRS_UMUT/rs_umut
+
+df$expected_MUT <- round(rs_mut*(df$expected_perc/100),0)
+df$expected_UMUT <- round(rs_umut*(df$expected_perc/100),0)
+
+# log2-fold change
+a <- log2((df$SBSRS_MUT+1)/(df$expected_MUT+1))
+b <- log2((df$SBSRS_UMUT+1)/(df$expected_UMUT+1))
+
+dd <- data.frame(MUT=a,UMUT=b)
+rownames(dd) <- c("EP","Het","Pol","Tra")
+
+col_fun = colorRamp2(c(-8, 0, 1), c("blue", "white", "red"))
+# Het Pol EP Tra
+dd <- dd[c(2,3,1,4),]
+h <- Heatmap(as.matrix(dd),cluster_rows = FALSE,cluster_columns = FALSE,col=col_fun,
+            cell_fun = function(j, i, x, y, w, h, col) { # add text to each grid
+        grid.text(round(dd[i, j],2), x, y)}
+)
+h
+
+pdf("outputs/heatmap_chromstates_0.005.pdf",useDingbats = FALSE,height = 2,width=3)
+h
+dev.off()
+
+df$"Log2-fold change_MUT" <- log2((df$SBSRS_MUT+1)/(df$expected_MUT+1))
+df$"Log2-fold change_UMUT" <- log2((df$SBSRS_UMUT+1)/(df$expected_UMUT+1))
+
+df <- df[c(2,3,1,4),]
+write.table(df[,c("CSTATE","nbases","SBSRS_MUT","SBSRS_UMUT","expected_MUT","expected_UMUT","Log2-fold change_MUT","Log2-fold change_UMUT")],
+            "outputs/chrom_states_enrichment.tsv",quote=FALSE,row.names = FALSE,col.names = TRUE,sep="\t")
+DT::datatable(df[,c("CSTATE","nbases","SBSRS_MUT","SBSRS_UMUT","expected_MUT","expected_UMUT","Log2-fold change_MUT","Log2-fold change_UMUT")], options = list(scrollX = T, scrollY=T), rownames = F)
+```
+
+# SBS-RT in early-late replication
+
+```{r}
+# Load replication data
+repli <- fread("supplementary_tables/Koren_hg19_PeaksAndValleys.tsv")
+repli$seqname <- paste0("chr",repli$Chrom)
+repli.gr <- makeGRangesFromDataFrame(repli, keep.extra.columns = TRUE, start.field="Start",end.field="End",seqnames.field="seqname",ignore.strand=TRUE)
+
+# Classify muts into early-late replication
+hits <- findOverlaps(muts.gr, 
+                     repli.gr[!is.na(repli.gr$Early_Late) & repli.gr$Early_Late=="Early"])
+muts_early <- unique(muts[queryHits(hits)])
+
+hits <- findOverlaps(muts.gr, 
+                     repli.gr[!is.na(repli.gr$Early_Late) & repli.gr$Early_Late=="Late"])
+muts_late <- unique(muts[queryHits(hits)])
+
+muts$REPLI <- ifelse(muts$mut %in% muts_early$mut, "Early",
+                      ifelse(muts$mut %in% muts_late$mut, "Late",NA))
+
+muts_repli_clones <- data.frame()
+ 
+for (s in c(cll_samples)){
+  cll <- 1
+  muts_repli_clones <- rbind(muts_repli_clones,muts[muts$SAMPLE==s & muts$CLUSTER==cll,])
+}
+
+for (s in c(rs_samples)){
+  if (s=="1669-04-01BD"){
+    next
+  }
+  rs <- max(muts$CLUSTER[muts$SAMPLE==s],na.rm = TRUE)
+  if(s=="3299-02-01TD"){
+    rs <- rs - 1
+  }
+  muts_repli_clones <- rbind(muts_repli_clones,muts[muts$SAMPLE==s & muts$CLUSTER == rs,])
+}
+
+# Add tumor-only as "TS clone"
+tumorOnlyMutsToAdd <- muts[muts$SAMPLE %in% rs_to_samples,]
+tumorOnlyMutsToAdd$CLUSTER <- 2
+muts_repli_clones <- rbind(muts_repli_clones, tumorOnlyMutsToAdd)
+rs_samples_and_rs_to_samples <- c(rs_samples, rs_to_samples)
+
+# Gather CLL clone and RT clone signatures (previously identified)
+sigs_list_repli_MUT <- list()
+sigs_list_repli_UMUT <- list()
+sigs_list_repli_MUT[["CLLcloneEarly"]] <- sigs_list_cstates_MUT[["CLLcloneHet"]]
+sigs_list_repli_MUT[["CLLcloneLate"]] <- sigs_list_cstates_MUT[["CLLcloneHet"]]
+sigs_list_repli_MUT[["RScloneEarly"]] <- sigs_list_cstates_MUT[["RScloneHet"]]
+sigs_list_repli_MUT[["RScloneLate"]] <- sigs_list_cstates_MUT[["RScloneHet"]]
+sigs_list_repli_UMUT[["CLLcloneEarly"]] <- sigs_list_cstates_UMUT[["CLLcloneHet"]]
+sigs_list_repli_UMUT[["CLLcloneLate"]] <- sigs_list_cstates_UMUT[["CLLcloneHet"]]
+sigs_list_repli_UMUT[["RScloneEarly"]] <- sigs_list_cstates_UMUT[["RScloneHet"]]
+sigs_list_repli_UMUT[["RScloneLate"]] <- sigs_list_cstates_UMUT[["RScloneHet"]]
+
+muts_repli_clones$NEW_SAMPLE_REPLI <- ifelse(muts_repli_clones$REPLI=="Early" & muts_repli_clones$SAMPLE %in% cll_samples, "CLLcloneEarly",
+                                  ifelse(muts_repli_clones$REPLI=="Early" & muts_repli_clones$SAMPLE %in% rs_samples_and_rs_to_samples, "RScloneEarly",
+                                         ifelse(muts_repli_clones$REPLI=="Late" & muts_repli_clones$SAMPLE %in% cll_samples, "CLLcloneLate",
+                                                ifelse(muts_repli_clones$REPLI=="Late" & muts_repli_clones$SAMPLE %in% rs_samples_and_rs_to_samples, "RScloneLate",NA))))
+
+vcfs2 <- makeGRangesFromDataFrame(muts_repli_clones[muts_repli_clones$CASE %in% meta$CASE[meta$IGHV=="U-IGHV"]], keep.extra.columns=TRUE, ignore.strand=TRUE,
+                       seqinfo=NULL, seqnames.field="CHROM", start.field="POSITION",
+                       end.field="POSITION", starts.in.df.are.0based=FALSE)
+vcfs2 <- split(vcfs2, as.factor(vcfs2$NEW_SAMPLE_REPLI))
+seqlevelsStyle(vcfs2) <- "UCSC"
+genome(vcfs2) <- "hg19"
+mut_mat_repli_clones_UMUT <- mut_matrix(vcf_list = vcfs2, ref_genome = ref_genome)
+
+vcfs2 <- makeGRangesFromDataFrame(muts_repli_clones[muts_repli_clones$CASE %in% meta$CASE[meta$IGHV=="M-IGHV"]], keep.extra.columns=TRUE, ignore.strand=TRUE,
+                       seqinfo=NULL, seqnames.field="CHROM", start.field="POSITION",
+                       end.field="POSITION", starts.in.df.are.0based=FALSE)
+vcfs2 <- split(vcfs2, as.factor(vcfs2$NEW_SAMPLE_REPLI))
+seqlevelsStyle(vcfs2) <- "UCSC"
+genome(vcfs2) <- "hg19"
+mut_mat_repli_clones_MUT <- mut_matrix(vcf_list = vcfs2, ref_genome = ref_genome)
+```
+
+
+## Mutational signatures analysis
+
+```{r, fig.width=6,fig.height=4}
+smallContributionMatrix_UMUT <- fitting_sigs3(cancer_signatures, threshold, mut_mat_repli_clones_UMUT, all_sigs2, sigs_list_repli_UMUT, threshold_add)
+write.table(smallContributionMatrix_UMUT, "outputs/signature_contributions_byCLONE_REPLI_UMUT.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+
+s <- smallContributionMatrix_UMUT[, -2]
+sM <- melt(s,id.vars = "Case")
+orderCases <- s$Case
+sM$Case <- factor(sM$Case, levels = orderCases)
+sM <- sM[sM$value > 0, ]
+colnames(sM) <- c("Case", "Signature", "Contribution")
+
+sM$Signature <- factor(sM$Signature, levels = all_sigs2)
+sM$IGHV <- "UMUT"
+sMcorr <- sM
+for (c in unique(sMcorr$Case)){
+  sMcorr$Contribution[sMcorr$Case==c] = sMcorr$Contribution[sMcorr$Case==c] / sum(sMcorr[sMcorr$Case==c,c("Contribution")])
+}
+sMcorr$Contribution <- sMcorr$Contribution * 100
+# Add total number of mutations
+nmuts <- colSums(mut_mat_repli_clones_UMUT)
+plot.labels <- data.frame(Case=levels(sMcorr$Case),nmuts=nmuts)
+plot.labels$IGHV <- "UMUT"
+
+sM_all <- sMcorr
+plot.labels_all <- plot.labels
+
+smallContributionMatrix_MUT <- fitting_sigs3(cancer_signatures, threshold, mut_mat_repli_clones_MUT, all_sigs2, sigs_list_repli_MUT, threshold_add)
+write.table(smallContributionMatrix_MUT, "outputs/signature_contributions_byCLONE_REPLI_MUT.tsv", sep="\t", col.names=T, row.names = F, quote=F)
+
+s <- smallContributionMatrix_MUT[, -2]
+sM <- melt(s,id.vars = "Case")
+orderCases <- s$Case
+sM$Case <- factor(sM$Case, levels = orderCases)
+sM <- sM[sM$value > 0, ]
+colnames(sM) <- c("Case", "Signature", "Contribution")
+sM$Signature <- factor(sM$Signature, levels = all_sigs2)
+sM$IGHV <- "MUT"
+sMcorr <- sM
+for (c in unique(sMcorr$Case)){
+  sMcorr$Contribution[sMcorr$Case==c] = sMcorr$Contribution[sMcorr$Case==c] / sum(sMcorr[sMcorr$Case==c,c("Contribution")])
+}
+sMcorr$Contribution <- sMcorr$Contribution * 100
+nmuts <- colSums(mut_mat_repli_clones_MUT)
+plot.labels <- data.frame(Case=levels(sMcorr$Case),nmuts=nmuts)
+plot.labels$IGHV <- "MUT"
+
+sM_all <- rbind(sM_all,sMcorr)
+plot.labels_all <- rbind(plot.labels_all,plot.labels)
+plot.labels_all$Accuracy[plot.labels_all$IGHV=="MUT"] <- smallContributionMatrix_MUT$Accuracy
+plot.labels_all$Accuracy[plot.labels_all$IGHV=="UMUT"] <- smallContributionMatrix_UMUT$Accuracy
+plot.labels_all$label <- paste0(plot.labels_all$nmuts," (",plot.labels_all$Accuracy,")")
+
+# Set order Het Pol EP Tra
+p<-ggplot() + 
+  geom_bar(data=sM_all, aes(x=as.factor(Case), y=Contribution, fill=Signature),stat="identity", col="black") + theme_classic() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5, size = 8)) + scale_fill_manual(values=sigsColors2) + xlab("Case")+
+  theme(
+    strip.background = element_blank(),
+    strip.placement = "outside",
+    strip.text.x = element_text(face="bold")
+  ) + facet_wrap(.~IGHV,nrow = 2)  + 
+  geom_text(data=plot.labels_all,aes(x=Case,y=105,label = label), nudge_y = 4, size=3) +   
+  ylim(0,110)+scale_y_continuous(breaks=c(0,25,50,75,100))
+  # geom_text(aes(x, y, label=lab),  data=d, vjust=1)
+
+p
+
+pdf("outputs/sigs_contrib_byClone_REPLI_corrPerc_MUT_UMUT_0.005_v2.pdf",height = 6,width = 10, useDingbats = F)
+p
+dev.off()
+```
+
+## Enrichment of SBS-RT observed vs expected
+
+```{r, fig.width=3,fig.height=3}
+# Total bases in chrom states
+ear <- sum(width(reduce(repli.gr[!is.na(repli.gr$Early_Late) & repli.gr$Early_Late=="Early"])))/1000000
+lat <- sum(width(reduce(repli.gr[!is.na(repli.gr$Early_Late) & repli.gr$Early_Late=="Late"])))/1000000 
+
+df <- data.frame(REPLI=c("Early","Late"),nbases=c(ear*1000000,lat*1000000),
+                 mb=c(ear,lat))
+
+# Get percentage of each chrom state
+total <- sum(df$nbases)
+df$expected_perc <- unlist(lapply(df$nbases, function(x) 100*(x/total) ))
+
+# Number of muts assigned to SBSRS
+rs_mut <- sum(smallContributionMatrix_MUT[,"SBS-RT"])
+rs_umut <- sum(smallContributionMatrix_UMUT[,"SBS-RT"])
+
+# Get percentage of muts assigned to SBSRT of early and late replication
+df$SBSRS_MUT <- smallContributionMatrix_MUT[c(3,4),"SBS-RT"]
+df$SBSRS_MUT_perc <- 100*df$SBSRS_MUT/rs_mut
+df$SBSRS_UMUT <- smallContributionMatrix_UMUT[c(3,4),"SBS-RT"]
+df$SBSRS_UMUT_perc <- 100*df$SBSRS_UMUT/rs_umut
+
+df$expected_MUT <- round(rs_mut*(df$expected_perc/100),0)
+df$expected_UMUT <- round(rs_umut*(df$expected_perc/100),0)
+
+# log2-fold change
+a <- log2((df$SBSRS_MUT+1)/(df$expected_MUT+1))
+b <- log2((df$SBSRS_UMUT+1)/(df$expected_UMUT+1))
+
+dd <- data.frame(MUT=a,UMUT=b)
+rownames(dd) <- c("Early","Late")
+
+col_fun = colorRamp2(c(-8, 0, 1), c("blue", "white", "red"))
+
+h <- Heatmap(as.matrix(dd),cluster_rows = FALSE,cluster_columns = FALSE, col=col_fun,
+            cell_fun = function(j, i, x, y, w, h, col) { # add text to each grid
+        grid.text(round(dd[i, j],2), x, y)}
+)
+h
+
+pdf("outputs/heatmap_repli_0.005.pdf",useDingbats = FALSE,height = 2,width=3)
+h
+dev.off()
+
+df$"Log2-fold change_MUT" <- log2((df$SBSRS_MUT+1)/(df$expected_MUT+1))
+df$"Log2-fold change_UMUT" <- log2((df$SBSRS_UMUT+1)/(df$expected_UMUT+1))
+
+write.table(df[,c("REPLI","nbases","SBSRS_MUT","SBSRS_UMUT","expected_MUT","expected_UMUT","Log2-fold change_MUT","Log2-fold change_UMUT")],
+            "outputs/chrom_repli_enrichment.tsv",quote=FALSE,row.names = FALSE,col.names = TRUE,sep="\t")
+DT::datatable(df[,c("REPLI","nbases","SBSRS_MUT","SBSRS_UMUT","expected_MUT","expected_UMUT","Log2-fold change_MUT","Log2-fold change_UMUT")], options = list(scrollX = T, scrollY=T), rownames = F)
+```
+
+# SBS-RT in coding mutations and driver genes
+
+```{r}
+# Calculating the probability of each SNV type in each sample/clonem, based on: 
+# Yang, F., Brady, S.W., Tang, C. et al. Chemotherapy and mismatch repair deficiency cooperate to fuel TP53 mutagenesis and ALL relapse. Nat Cancer 2, 819–834 (2021).
+
+# We consider each rt clone/tumorOnly sample with SBS-RT
+rtclones_withSBSRT <- c("12_7","19_5","3299_4","365_5","63_4","4686_NA")
+sigs_rtclones <- fit_clones[fit_clones$Case %in% rtclones_withSBSRT,]
+sigs_rtclones <- rbind(sigs_rtclones,fit_samples[fit_samples$Case %in% c("4686-03-01BD"),])
+sigs_rtclones$Case <- c("12_7","19_5","3299_4","365_5","63_4","4686_NA")
+sigs_rtclones
+
+results <- list()
+for (s in sigs_rtclones$Case){
+  ss <- sigs_rtclones[sigs_rtclones$Case==s,]
+  ss <- as.data.frame(ss)
+  # For each contributing signature (to rt clone s)
+  dfs <- data.frame(matrix(ncol = 0, nrow = 96))
+  rownames(dfs) <- mut_types$V1
+  for (sig in colnames(ss[,-c(1,2)])[ss[,-c(1,2)]>0]){
+    news <- round(cancer_signatures[,sig]*ss[,sig])
+    dfs <- cbind(dfs,news)
+  }
+  colnames(dfs) <- colnames(ss[,-c(1,2)])[ss[,-c(1,2)]>0]
+  dfs$maxsig <- colnames(dfs)[apply(dfs,1,which.max)]
+  dfs$total <- apply(dfs[,-ncol(dfs)],1,sum)
+  dfs$probSBSRT <- dfs$`SBS-RT`/dfs$total
+  dfs$probmax <- as.numeric(apply(dfs,1,function(x) x[x["maxsig"]]))/dfs$total
+  results[[s]] <- dfs
+}
+
+# Load coding mutations and classifying SNVs
+muts_coding <- fread("supplementary_tables/supplementaryTableX_coding_mutations.tsv")
+muts_coding <- muts_coding[muts_coding$TYPE=="SNV" & is.na(muts_coding$FLAG),]
+muts_coding$SAMPLE_CLONE <- paste(muts_coding$CASE,muts_coding$CLUSTER,sep="_")
+# Select coding SNV in RT clones and tumorOnly cases with SBS-RT
+muts_coding <- muts_coding[muts_coding$SAMPLE_CLONE %in% rtclones_withSBSRT & muts_coding$SAMPLE %in% c(rs_contrib,rs_to_contrib),]
+# Annotate trinuc context
+out <- snvsClassification(muts_coding[,c("CHROM","POSITION","REF","ALT")], title = "Coding mutations in RT clones")
+muts_coding <- cbind(muts_coding, out[[1]][,5:6])
+out[[2]]
+muts_coding$trinuc <- paste0(substr(muts_coding$context,1,1),"[",muts_coding$mutType,"]",substr(muts_coding$context,3,3))
+
+# Annotate probability that SNV is contributed by SBS-RT
+muts_coding$probSBSRT <- apply(muts_coding,1,function(x) results[[x["SAMPLE_CLONE"]]]$probSBSRT[rownames(results[[x["SAMPLE_CLONE"]]])==x["trinuc"]])
+muts_coding$probmax <- apply(muts_coding,1,function(x) results[[x["SAMPLE_CLONE"]]]$probmax[rownames(results[[x["SAMPLE_CLONE"]]])==x["trinuc"]])
+muts_coding$maxsig <- apply(muts_coding,1,function(x) results[[x["SAMPLE_CLONE"]]]$maxsig[rownames(results[[x["SAMPLE_CLONE"]]])==x["trinuc"]])
+# Annotate if SNV is in driver gene
+drivergenes <- c("TP53", "CDKN2A", "CDKN2B","CDKN1A", "CDKN1B", "MYC", "MGA", "NOTCH1","SPEN","FBXW7", "BIRC3", "EGR2", "TNFAIP3", "NFKBIE", "TRAF3", 
+               "CREBBP", "EP300", "ARID1A", "ARID1B","ARID4B", "CHD2", "IRF4", "SETD2", "BAZ2A","NRAS","SYNE1",  "ATM", "FSIP2",
+               "ZNF292",  "SETD1A", "NFKB2", "ATRX","XPO1", "IGLL5", "SF3B1", "ASXL1", "POT1","HIST1H1E", "CCND2","EWSR1", "MAP2K1",
+               "NXF1", "RPS15","KRAS", "TNFRSF11A", "LYN","MYOM2", "DIS3","PDE4DIP", "HIST1H3B","SETD1B","BTG1","IRF2BP2", "SEMA5A",
+               "SMARCA4","EZH2", "NAV1","HIST1H1C","TNFRSF14", "NOTCH2", "HIST1H2AM", "BCR", "BRCA2","CIITA", "KMT2C","KMT2D","PTPN6",
+               "BCL2", "PRDM1", "IRF8","P2RY8", "TAF1","PTPRD")
+muts_coding$likely_SBSRT <- ifelse(muts_coding$probSBSRT >0.7, "YES", "NO")
+muts_coding$likely_maxsig <- ifelse(muts_coding$probmax >0.7, "YES", "NO")
+muts_coding$IN_DRIVER <- ifelse(muts_coding$GENE_NAME %in% drivergenes, "YES", "NO")
+
+write.table(muts_coding[,c(1,2,3,4,5,6,7,15,13,20,27,28,29,30,31,32,33)],"outputs/sbsrt_coding2.tsv",quote=FALSE,row.names = FALSE,col.names = TRUE,sep="\t")
+
+DT::datatable(muts_coding[,c(1,2,3,4,5,6,7,15,13,20,27,28,29,30,31,32,33)], options = list(scrollX = T, scrollY=T), rownames = F)
+
+table(muts_coding$likely_SBSRT,muts_coding$IN_DRIVER)
+```
+
+# Session info
+```{r}
+sessionInfo()
+```
