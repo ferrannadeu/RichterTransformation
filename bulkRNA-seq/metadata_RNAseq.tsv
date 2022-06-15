@@ -1,0 +1,13 @@
+Case	Sample	SampleCodeFile	TimePoint	Diagnosis	IGHV	Material	Tissue	Purity	Library	Sequencer	SequencingCenter	PreviouslyPublished	rRNA	n_processed_kallisto
+63	063-10-01TR	063-10-01TR	T1	CLL	U-IGHV	Cryopreserved cells	Lymph node	96	Stranded mRNA-seq	HiSeq3000/4000 (2x76bp)	CNAG	no	0.82	43430795
+63	063-11-01TR	063-11-01TR	T3	RT	U-IGHV	Cryopreserved cells	Lymph node	NA	Stranded mRNA-seq	HiSeq3000/4000 (2x76bp)	CNAG	no	0.83	38277805
+365	365-13-01TR	365-13-01TR	T1	CLL	M-IGHV	Cryopreserved cells	Lymph node	95	Stranded mRNA-seq	HiSeq3000/4000 (2x76bp)	CNAG	no	1.09	44216995
+365	365-14-01TR	365-14-01TR	T3	RT	M-IGHV	Cryopreserved cells	Lymph node	96.4	Stranded mRNA-seq	HiSeq3000/4000 (2x76bp)	CNAG	no	0.87	39103147
+3299	3299-03-02TR	3299-03-02TR	T2	CLL	U-IGHV	Cryopreserved cells	Peripheral blood	97	Stranded mRNA-seq	HiSeq3000/4000 (2x76bp)	CNAG	no	1.26	37740216
+3299	3299-02-02TR	3299-02-02TR	T4	RT	U-IGHV	Cryopreserved cells	Peripheral blood	99	Stranded mRNA-seq	HiSeq3000/4000 (2x76bp)	CNAG	no	0.89	57520456
+19	019-0047-02TR	019-0047-02TR	T2	CLL	M-IGHV	Cryopreserved cells	Peripheral blood	99	Stranded mRNA-seq	HiSeq3000/4000 (2x76bp)	CNAG	no	0.21	93586283
+19	019-17-01TR	019-17-01TR	T6	RT	M-IGHV	Cryopreserved cells	Peripheral blood	93.5	Stranded mRNA-seq	HiSeq3000/4000 (2x76bp)	CNAG	no	3	52261244
+12	012-02-02TR	012-02-2TR	T2	CLL	U-IGHV	Cryopreserved cells	Peripheral blood	99.5	Unstranded poly-A-based mRNA enrichment	HiSeq2000 (2x76bp)	CNAG	yes (ICGC-CLL study, Puente et al Nature 2015)	0.91	41295074
+12	012-21-01TR	12-21-1TR	T6	RT	U-IGHV	Cryopreserved cells	Peripheral blood	95	Stranded mRNA Prep, Ligation kit	NextSeq2000 (2x100bp)	IDIBAPS	no	1.2	73631981
+816	816-01-06TR	816-01-6TR	T1	CLL	U-IGHV	Cryopreserved cells	Peripheral blood	98.9	Stranded mRNA-seq	HiSeq3000/4000 (2x76bp)	CNAG	no	0.99	40007980
+816	816-07-01TR	816-07-01TR	T3	RT	U-IGHV	Cryopreserved cells	Lymph node	92	Stranded mRNA-seq	HiSeq3000/4000 (2x76bp)	CNAG	no	1.3	53038608

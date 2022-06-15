@@ -1,0 +1,569 @@
+---
+title: "Bulk RNA-seq analyses"
+author: "Ferran Nadeu & Romina Royo"
+date: "`r format(Sys.time(), '%d/%m/%y')`"
+output:
+  html_document: 
+    theme: paper
+    toc: yes
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+# Settings
+
+```{r, message=FALSE}
+library("tximport")
+library("DESeq2")
+library("org.Hs.eg.db")
+library("ggplot2")
+library("ggrepel")
+library("reshape2")
+library("gridExtra")
+library("ComplexHeatmap")
+library("clusterProfiler")
+library("circlize")
+library("ggpubr")
+```
+
+```{r}
+# define path
+pathToData <- "./"
+
+# define cutoffs for DEA
+qValue <- 0.01
+logFC <- 1
+
+# define size gene sets
+min_gs_size <- 10
+max_gs_size <- 250
+
+# ensembl transcripts to gene table
+ensembl <- read.table(paste0(pathToData, "ensembl/ensembl_genes_transcripts_v100.txt"), header = T, sep = "\t", stringsAsFactors = F)
+tx2gene <- ensembl[,c(4,2)]
+```
+
+# PCA
+
+```{r, fig.width=12, fig.height=2.75}
+# sampleTable
+sampleTable <- read.table(paste0(pathToData, "metadata_RNAseq.tsv"), sep = "\t", header = T, stringsAsFactors = F)
+sampleTable$fileName <- paste0(pathToData, "kallisto/", sampleTable$Sample, "_abundance.tsv")
+
+# Import using tximport package
+txi <- tximport(files = sampleTable$fileName, type = "kallisto", txIn = TRUE, txOut = FALSE, tx2gene = tx2gene)
+
+# DESeq
+sampleTable$Case <- factor(as.character(sampleTable$Case), levels = unique(sampleTable$Case))
+sampleTable$Diagnosis <- factor(sampleTable$Diagnosis, levels = c("CLL", "RT"))
+dds_CLLRT <- DESeqDataSetFromTximport(txi = txi, colData = sampleTable, design = ~ Case + Diagnosis)
+keep <- rowSums(counts(dds_CLLRT)) >= 10
+dds_CLLRT <- dds_CLLRT[keep,]
+dds_CLLRT <- DESeq(dds_CLLRT)
+
+vsd <- vst(dds_CLLRT, blind=FALSE)
+vsd_CLLRT <- assay(vsd)
+colnames(vsd_CLLRT) <- colData(dds_CLLRT)[,c("Sample")]
+
+# PCA
+pca <- prcomp(t(vsd_CLLRT), scale=T)
+x <- summary(pca)
+pcaTable <- cbind(sampleTable, pca$x[,1:6])
+
+p12 <- ggplot(pcaTable, aes(x = PC1, y = PC2, fill=Diagnosis, label=Case)) +
+  geom_point(aes(color=IGHV), size=3, pch=21) +
+  scale_color_manual(values=c("#010101", "#B4B4B4")) + 
+  scale_fill_manual(values=c("#EDEDED", "#CE899A"))+
+  geom_text_repel(size=3.25) +
+  theme_classic() + theme(axis.ticks = element_blank(), axis.text=element_blank()) + 
+  xlab(paste0("PC1 (", round(x$importance[2,1]*100,1), "%)")) +
+  ylab(paste0("PC2 (", round(x$importance[2,2]*100,1), "%)"))
+
+p13 <- ggplot(pcaTable, aes(x = PC1, y = PC3, fill=Diagnosis, label=Case)) +
+  geom_point(aes(color=IGHV), size=3, pch=21) +
+  scale_color_manual(values=c("#010101", "#B4B4B4")) + 
+  scale_fill_manual(values=c("#EDEDED", "#CE899A"))+
+  geom_text_repel(size=3.25) +
+  theme_classic() + theme(axis.ticks = element_blank(), axis.text=element_blank()) + 
+  xlab(paste0("PC1 (", round(x$importance[2,1]*100,1), "%)")) +
+  ylab(paste0("PC3 (", round(x$importance[2,3]*100,1), "%)")) 
+
+p14 <- ggplot(pcaTable, aes(x = PC1, y = PC4, fill=Diagnosis, label=Case)) +
+  geom_point(aes(color=IGHV), size=3, pch=21) +
+  scale_color_manual(values=c("#010101", "#B4B4B4")) + 
+  scale_fill_manual(values=c("#EDEDED", "#CE899A"))+
+  geom_text_repel(size=3.25) +
+  theme_classic() + theme(axis.ticks = element_blank(), axis.text=element_blank()) + 
+  xlab(paste0("PC1 (", round(x$importance[2,1]*100,1), "%)")) +
+  ylab(paste0("PC4 (", round(x$importance[2,4]*100,1), "%)")) 
+
+pdf("outputs/RT_PCA.pdf", width = 12, height = 2.75, useDingbats = F)
+grid.arrange(p12, p13, p14, ncol=3)
+dev.off()
+pdf("outputs/RT_PCA_12.pdf", width = 3.54, height = 2.75, useDingbats = F)
+p12
+dev.off()
+
+grid.arrange(p12, p13, p14, ncol=3)
+```
+
+
+# DEA
+
+- 4 CLL vs 4 RT (paired)
+- Cases 19 and 3299 excluded due to their intermediate gene expression profile
+
+## DEA code
+
+```{r}
+# sampleTable
+sampleTable2 <- sampleTable[! sampleTable$Case %in% c(19, 3299),]
+sampleTable2$Case <- factor(as.character(sampleTable2$Case), levels=c("63", "365", "12", "816"))
+
+# Import using tximport package
+txi2 <- tximport(files = sampleTable2$fileName, type = "kallisto", txIn = TRUE, txOut = FALSE, tx2gene = tx2gene)
+
+# DESeq
+dds_CLLRT2 <- DESeqDataSetFromTximport(txi = txi2, colData = sampleTable2, design = ~ Case + Diagnosis)
+keep <- rowSums(counts(dds_CLLRT2)) >= 10
+dds_CLLRT2 <- dds_CLLRT2[keep,]
+dds_CLLRT2 <- DESeq(dds_CLLRT2)
+res_CLLRT2 <- results(dds_CLLRT2, alpha = qValue)
+resLFC_CLLRT2 <- lfcShrink(dds_CLLRT2, coef="Diagnosis_RT_vs_CLL", res = res_CLLRT2, type="apeglm")
+
+# # QC plots
+# plotDispEsts(dds_CLLRT2, ylim = c(1e-6, 1e1) )
+# DESeq2::plotMA(res_CLLRT2, main="res")
+# DESeq2::plotMA(resLFC_CLLRT2, main="resLFC")
+# hist(resLFC_CLLRT2$pvalue, breaks=20, col="grey")
+# ## The ratio of small p values for genes binned by mean normalized count
+# qs <- c(0, quantile(res_CLLRT2$baseMean[res_CLLRT2$baseMean > 0], 0:6/6))
+# bins <- cut(res_CLLRT2$baseMean, qs)
+# levels(bins) <- paste0("~", round(signif((qs[-1] + qs[-length(qs)])/2, 2)))
+# fractionSig <- tapply(res_CLLRT2$pvalue, bins, function(p) mean(p < .01, na.rm = TRUE))
+# barplot(fractionSig, xlab = "mean normalized count", ylab = "fraction of p values < 0.01")
+
+# # QC numbers
+# length(resLFC_CLLRT2$baseMean[is.na(resLFC_CLLRT2$baseMean)]) ## zero counts
+# length(resLFC_CLLRT2$pvalue[is.na(resLFC_CLLRT2$pvalue)]) ## outliers
+# length(resLFC_CLLRT2$padj[is.na(resLFC_CLLRT2$padj)]) ## automatic independent filtering
+# dim(resLFC_CLLRT2)
+
+# Add gene names
+resLFC_CLLRT2$EnsemblGeneStableID <- rownames(resLFC_CLLRT2)
+resLFC_CLLRT2$HGNC.symbol <- ensembl$HGNC.symbol[match(resLFC_CLLRT2$EnsemblGeneStableID, ensembl$Gene.stable.ID.version)]
+
+# Add direction (up/down/NS)
+resLFC_CLLRT2$Direction <- "NS"
+resLFC_CLLRT2$Direction[resLFC_CLLRT2$padj < qValue & resLFC_CLLRT2$log2FoldChange > logFC] <- "Up"
+resLFC_CLLRT2$Direction[resLFC_CLLRT2$padj < qValue & resLFC_CLLRT2$log2FoldChange < -logFC] <- "Down"
+resLFC_CLLRT2$Direction <- factor(resLFC_CLLRT2$Direction, levels = c("NS", "Down", "Up"))
+
+# Keep only genes with HGNC.symbol and remove duplicated HGNC.symbol
+resLFC_CLLRT2_db <- data.frame(resLFC_CLLRT2)
+resLFC_CLLRT2_db <- resLFC_CLLRT2_db[order(resLFC_CLLRT2_db$padj), ]
+resLFC_CLLRT2_db <- resLFC_CLLRT2_db[resLFC_CLLRT2_db$HGNC.symbol != "", ]
+resLFC_CLLRT2_db <- resLFC_CLLRT2_db[!duplicated(resLFC_CLLRT2_db$HGNC.symbol), ]
+table(resLFC_CLLRT2_db$Direction)
+
+# Write table DEA
+write.table(resLFC_CLLRT2_db[,c(6,7,1:5,8)], "outputs/RT_DEA.tsv", col.names = T, row.names = F, sep = "\t", quote = F)
+
+DT::datatable(resLFC_CLLRT2_db[,c(6,7,1:5,8)], options = list(scrollX = T, scrollY=T), rownames = F)
+```
+
+## Volcano plot
+
+```{r, fig.width = 3, fig.height = 3.8}
+# Volcano plot
+vp_CLLRT <- ggplot(resLFC_CLLRT2_db[!is.na(resLFC_CLLRT2_db$padj),], aes(log2FoldChange, -log10(pvalue), color=Direction)) + 
+  geom_point() + theme_classic() + xlab("log2(FC)") + ylab("-log10(P)") +
+  scale_color_manual(values=c("gray50", "dodgerblue4", "darkred")) +
+  labs(color = NULL) + 
+  annotate("text", x = -8, y=64, label = paste0("n=", nrow(resLFC_CLLRT2_db[resLFC_CLLRT2_db$Direction == "Down",])), col="dodgerblue4") +
+  annotate("text", x=8, y=64, label= paste0("n=", nrow(resLFC_CLLRT2_db[resLFC_CLLRT2_db$Direction == "Up",])), col="darkred") + 
+  theme(legend.position="top")
+
+pdf("outputs/RT_volcano.pdf", width = 3, height = 3.8, useDingbats = F)
+vp_CLLRT
+dev.off()
+vp_CLLRT
+```
+
+## Heatmap
+
+```{r, fig.width = 8, fig.height = 6}
+valsAll <- t(scale(t(vsd_CLLRT)))
+colnames(valsAll) <- paste0(sampleTable$Case, " (", sampleTable$TimePoint, ")")
+valsAll_DEG <- valsAll[rownames(valsAll) %in% rownames(resLFC_CLLRT2_db)[resLFC_CLLRT2_db$Direction!="NS"], ] 
+
+sampleTable$UsedInDEA <- "Yes"
+sampleTable$UsedInDEA[sampleTable$Case %in% c("19", "3299")] <- "No"
+
+# define column order
+colOrder <- c( "19 (T2)" , "3299 (T2)", "12 (T2)", "816 (T1)", "63 (T1)",  "365 (T1)",  "3299 (T4)", "19 (T6)", "12 (T6)", "816 (T3)","63 (T3)","365 (T3)")
+valsAll_DEG <- valsAll_DEG[, match(colOrder, colnames(valsAll_DEG))]
+sampleTableHeatmap <- sampleTable[match(colOrder, paste0(sampleTable$Case, " (", sampleTable$TimePoint, ")")),]
+
+# heatmap annotation - columns
+ha = HeatmapAnnotation(
+   Diagnosis=sampleTableHeatmap$Diagnosis, IGHV=sampleTableHeatmap$IGHV, Tissue=sampleTableHeatmap$Tissue, DEA=sampleTableHeatmap$UsedInDEA,
+    col = list(IGHV = c("M-IGHV"="#010101", "U-IGHV"="#B4B4B4"),
+               Diagnosis = c("CLL"="#EDEDED", "RT"="#CE899A"),
+               Tissue = c("Peripheral blood"="#FFDBB8", "Lymph node"="#CAF9E2"),
+               DEA = c("Yes"="#FFF4B0", "No"="#F4F4F4")
+               ),
+    show_legend = T, border = T,
+    show_annotation_name = T)
+
+hm <- Heatmap(valsAll_DEG, 
+             cluster_rows = T, show_row_dend = F, split = 2, show_row_names = FALSE,
+             cluster_columns = F, 
+             column_order = colOrder,
+             column_split = c(1,1,2,2,2,2,3,3,4,4,4,4),
+             top_annotation = ha, show_column_names = TRUE,
+             row_title = c(paste0("n=", nrow(resLFC_CLLRT2_db[resLFC_CLLRT2_db$Direction == "Up",])),
+                           paste0("n=", nrow(resLFC_CLLRT2_db[resLFC_CLLRT2_db$Direction == "Down",]))),
+             row_title_rot = 0, 
+             border="black", col = colorRamp2(c(-3, 0, 3), c("#343A8F", "white", "#D63027")),
+             row_names_gp = gpar(fontsize = 4),
+             heatmap_legend_param = list(title = "Gene z-scores")
+             )
+
+# heatmap annotation - rows
+epi <- read.table("inputs_epigenetics/associated-regions-deg_epi_and_meth.txt", header = T, sep = "\t", stringsAsFactors = F)
+epi <- epi[match(rownames(valsAll_DEG), epi$EnsemblGeneStableID, ),] 
+table(epi$Direction.rnaseq)
+
+# check overlap
+table(epi$Direction.rnaseq, epi$Direction.methylation)
+(3+29+4+57)/(3+29+777+4+57+1378)*100
+table(epi$Direction.rnaseq, epi$Direction.H3K27ac)
+(286+173)/(286+35+14+474+225+173+12+1029)*100
+table(epi$Direction.rnaseq, epi$Direction.atac)
+(59+294)/(59+118+632+40+294+1105)*100
+
+# genes to highlight
+genesToHighlight <- c(
+  "MYCBP", # MYC up in 3 cases (add to boxplots)
+  "WNT5A", "WNT3", "WNT16", "WNT10A", "WNT6",
+  "TLR10", "TLR9", "TLR8",
+  "TRAF5",
+  "CXCR4",
+  "MKI67", "PCNA", "TOP2A", 
+  "CDKN1B",
+  "CDK4", "CDK6", "CDK17","CDK1","CDK5", "CDKN3",
+  "AICDA", # POLH LFC 0.88 pval < 0.01 (add to boxplots)
+  "CCND2", # CCND3 in case 19 and 3299 (add to boxplots) 
+  "HLA-A", "HLA-B",
+  "ARID4A", "ARID4B", "ARID5B", "CREBBP", "EP300", "CHD7", "CHD2", "BAZ2A")
+ha_row = rowAnnotation(foo = anno_mark(at = which(epi$HGNC.symbol %in% genesToHighlight), labels = epi$HGNC.symbol[which(epi$HGNC.symbol %in% genesToHighlight)], labels_gp = gpar(fontsize = 5)))
+
+# list of heatmaps
+ht_list = hm + 
+  Heatmap(epi$Direction.rnaseq, name = "RNA-seq", width = unit(0.1, "cm"), border = T, col = c("Down"="#343A8F", "Up"="#D63027", "NS"="white")) +
+  Heatmap(epi$Direction.methylation, name = "DNA meth.", width = unit(0.5, "cm"), border = T, col = c("Hypo"="#34398E", "Hyper"="#A61829", "NS"="white")) +
+  Heatmap(epi$Direction.H3K27ac, name = "H3K27ac", width = unit(0.5, "cm"), border = T, col = c("Decrease"="#0B652E", "Increase"="#F6A318", "Increase;Decrease"="gray70", "NS"="white")) +
+  Heatmap(epi$Direction.atac, name = "ATAC-seq", width = unit(0.5, "cm"), border = T, col = c("Decrease"="#0B652E", "Increase"="#F6A318", "NS"="white"), right_annotation = ha_row)
+
+# plot
+pdf("outputs/RT_heatmap.pdf", width = 9.5, height = 8, useDingbats = F)
+ht_list
+dev.off()
+ht_list
+```
+
+## Boxplots
+
+```{r}
+# normalized counts
+normalizedCounts <- counts(dds_CLLRT, normalized=TRUE)
+colnames(normalizedCounts) <- dds_CLLRT$Sample
+
+# keep only genes kept in DEA table
+normalizedCounts <- normalizedCounts[rownames(normalizedCounts) %in% rownames(resLFC_CLLRT2_db),]
+normalizedCounts <- data.frame(t(normalizedCounts), stringsAsFactors = F)
+
+# add metadata
+normalizedCounts$Case <- sampleTable$Case
+normalizedCounts$Sample <- sampleTable$Sample
+normalizedCounts$Diagnosis <- sampleTable$Diagnosis
+normalizedCounts$IGHV <- sampleTable$IGHV
+normalizedCounts$Tissue <- sampleTable$Tissue
+
+# order
+normalizedCounts <- normalizedCounts[,c(19555:19559, 1:19554)]
+
+# by HGNC.symbol
+normalizedCountsHGNC.symbol <- normalizedCounts
+colnames(normalizedCountsHGNC.symbol)[6:ncol(normalizedCountsHGNC.symbol)] <- resLFC_CLLRT2_db$HGNC.symbol[match(colnames(normalizedCountsHGNC.symbol)[6:ncol(normalizedCountsHGNC.symbol)], rownames(resLFC_CLLRT2_db))]
+
+# save
+write.table(normalizedCounts, "outputs/normalizedCounts_ensembl.tsv", row.names = F, col.names = T, sep = "\t", quote = F)
+write.table(normalizedCountsHGNC.symbol, "outputs/normalizedCounts_HGNCsymbol.tsv", row.names = F, col.names = T, sep = "\t", quote = F)
+```
+
+```{r, fig.width = 10, fig.height = 7}
+# selected genes based on DEA
+genes <- c("MKI67", "CDK1", "CDK4","CDK5","CDK6","CDKN3","CDK17",
+           "WNT3", "WNT5A", "WNT6", "WNT16", "TLR8", "TLR9", "TLR10", 
+           "AICDA", "POLH", "MYC", "MYCBP", "CCND2", "CCND3")
+
+mDB <- melt(normalizedCountsHGNC.symbol, id.vars = c("Case", "Sample", "Diagnosis", "IGHV", "Tissue"))
+mDBmini <- mDB[mDB$variable %in% genes,]
+mDBmini$variable <- factor(mDBmini$variable, levels = genes)
+mDBmini$value <- mDBmini$value/1000
+a <- ggplot(mDBmini, aes(Diagnosis, value, fill=Diagnosis)) +
+  geom_boxplot(alpha=0.25, outlier.shape = NA) + 
+  geom_jitter(width = 0.2, height = 0, pch=21, size=2) + 
+  theme_classic() +
+  scale_fill_manual(values=c("#EDEDED", "#CE899A")) +
+  ylab("Expression (normalized counts, x1000)") + xlab(NULL) +
+  theme(legend.position="top") +
+  geom_text_repel(data = mDBmini[mDBmini$Diagnosis=="RT",], aes(label = Case), size=3)+
+  facet_wrap(~ variable, scales = "free", nrow=3)
+
+pdf("outputs/RT_boxplots.pdf", width = 6*1.2, height = 4.2*1.2, useDingbats = F)
+a
+dev.off()
+a
+```
+
+```{r, fig.width = 12, fig.height = 7}
+# selected driver genes based on genomic alterations
+MYCN <- ggplot(normalizedCountsHGNC.symbol, aes(Diagnosis, MYCN/1000, fill=Diagnosis)) +
+  geom_boxplot(alpha=0.25, outlier.shape = NA) + 
+  geom_jitter(width = 0.2, height = 0, pch=21, size=2) + 
+  theme_classic() +
+  scale_fill_manual(values=c("#EDEDED", "#CE899A")) +
+  ylab("Expression\n(norm. counts, x1000)") + xlab(NULL) + ggtitle("MYCN") +
+  theme(legend.position="top") +
+  geom_text_repel(data = normalizedCountsHGNC.symbol[normalizedCountsHGNC.symbol$Case==816,], aes(label = Case), size=3)
+
+CDKN1B <- ggplot(normalizedCountsHGNC.symbol, aes(Diagnosis, CDKN1B/1000, fill=Diagnosis)) +
+  geom_boxplot(alpha=0.25, outlier.shape = NA) + 
+  geom_jitter(width = 0.2, height = 0, pch=21, size=2) + 
+  theme_classic() +
+  scale_fill_manual(values=c("#EDEDED", "#CE899A")) +
+  ylab("Expression\n(norm. counts, x1000)") + xlab(NULL) + ggtitle("CDKN1B") +
+  theme(legend.position="top") +
+  geom_text_repel(data = normalizedCountsHGNC.symbol[normalizedCountsHGNC.symbol$Case==19,], aes(label = Case), size=3) +
+  stat_compare_means(method="t.test")
+
+ARID4B <- ggplot(normalizedCountsHGNC.symbol, aes(Diagnosis, ARID4B/1000, fill=Diagnosis)) +
+  geom_boxplot(alpha=0.25, outlier.shape = NA) + 
+  geom_jitter(width = 0.2, height = 0, pch=21, size=2) + 
+  theme_classic() +
+  scale_fill_manual(values=c("#EDEDED", "#CE899A")) +
+  ylab("Expression\n(norm. counts, x1000)") + xlab(NULL) + ggtitle("ARID4B") +
+  theme(legend.position="top") +
+  geom_text_repel(data = normalizedCountsHGNC.symbol[normalizedCountsHGNC.symbol$Case==816,], aes(label = Case), size=3)+
+  stat_compare_means(method="t.test")
+
+ARID1A <- ggplot(normalizedCountsHGNC.symbol, aes(Diagnosis, ARID1A/1000, fill=Diagnosis)) +
+  geom_boxplot(alpha=0.25, outlier.shape = NA) + 
+  geom_jitter(width = 0.2, height = 0, pch=21, size=2) + 
+  theme_classic() +
+  scale_fill_manual(values=c("#EDEDED", "#CE899A")) +
+  ylab("Expression\n(norm. counts, x1000)") + xlab(NULL) + ggtitle("ARID1A") +
+  theme(legend.position="top") +
+  geom_text_repel(data = normalizedCountsHGNC.symbol[normalizedCountsHGNC.symbol$Case %in% c(63, 365),], aes(label = Case), size=3)+
+  stat_compare_means(method="t.test")
+
+CHD2 <- ggplot(normalizedCountsHGNC.symbol, aes(Diagnosis, CHD2/1000, fill=Diagnosis)) +
+  geom_boxplot(alpha=0.25, outlier.shape = NA) + 
+  geom_jitter(width = 0.2, height = 0, pch=21, size=2) + 
+  theme_classic() +
+  scale_fill_manual(values=c("#EDEDED", "#CE899A")) +
+  ylab("Expression\n(norm. counts, x1000)") + xlab(NULL) + ggtitle("CHD2") +
+  theme(legend.position="top") +
+  stat_compare_means(method="t.test")
+
+EP300 <- ggplot(normalizedCountsHGNC.symbol, aes(Diagnosis, EP300/1000, fill=Diagnosis)) +
+  geom_boxplot(alpha=0.25, outlier.shape = NA) + 
+  geom_jitter(width = 0.2, height = 0, pch=21, size=2) + 
+  theme_classic() +
+  scale_fill_manual(values=c("#EDEDED", "#CE899A")) +
+  ylab("Expression\n(norm. counts, x1000)") + xlab(NULL) + ggtitle("EP300") +
+  theme(legend.position="top") +
+  geom_text_repel(data = normalizedCountsHGNC.symbol[normalizedCountsHGNC.symbol$Case==12,], aes(label = Case), size=3)+
+  stat_compare_means(method="t.test")
+
+CREBBP <- ggplot(normalizedCountsHGNC.symbol, aes(Diagnosis, CREBBP/1000, fill=Diagnosis)) +
+  geom_boxplot(alpha=0.25, outlier.shape = NA) + 
+  geom_jitter(width = 0.2, height = 0, pch=21, size=2) + 
+  theme_classic() +
+  scale_fill_manual(values=c("#EDEDED", "#CE899A")) +
+  ylab("Expression\n(norm. counts, x1000)") + xlab(NULL) + ggtitle("CREBBP") +
+  theme(legend.position="top") +
+  geom_text_repel(data = normalizedCountsHGNC.symbol[normalizedCountsHGNC.symbol$Case==12,], aes(label = Case), size=3)+
+  stat_compare_means(method="t.test")
+
+TRAF3 <- ggplot(normalizedCountsHGNC.symbol, aes(Diagnosis, TRAF3/1000, fill=Diagnosis)) +
+  geom_boxplot(alpha=0.25, outlier.shape = NA) + 
+  geom_jitter(width = 0.2, height = 0, pch=21, size=2) + 
+  theme_classic() +
+  scale_fill_manual(values=c("#EDEDED", "#CE899A")) +
+  ylab("Expression\n(norm. counts, x1000)") + xlab(NULL) + ggtitle("TRAF3") +
+  theme(legend.position="top") +
+  geom_text_repel(data = normalizedCountsHGNC.symbol[normalizedCountsHGNC.symbol$Case==12,], aes(label = Case), size=3)+
+  stat_compare_means(method="t.test")
+
+SPEN <- ggplot(normalizedCountsHGNC.symbol, aes(Diagnosis, SPEN/1000, fill=Diagnosis)) +
+  geom_boxplot(alpha=0.25, outlier.shape = NA) + 
+  geom_jitter(width = 0.2, height = 0, pch=21, size=2) + 
+  theme_classic() +
+  scale_fill_manual(values=c("#EDEDED", "#CE899A")) +
+  ylab("Expression\n(norm. counts, x1000)") + xlab(NULL) + ggtitle("SPEN") +
+  theme(legend.position="top") +
+  geom_text_repel(data = normalizedCountsHGNC.symbol[normalizedCountsHGNC.symbol$Case==12,], aes(label = Case), size=3)+
+  stat_compare_means(method="t.test")
+
+TNFRSF14 <- ggplot(normalizedCountsHGNC.symbol, aes(Diagnosis, TNFRSF14/1000, fill=Diagnosis)) +
+  geom_boxplot(alpha=0.25, outlier.shape = NA) + 
+  geom_jitter(width = 0.2, height = 0, pch=21, size=2) + 
+  theme_classic() +
+  scale_fill_manual(values=c("#EDEDED", "#CE899A")) +
+  ylab("Expression\n(norm. counts, x1000)") + xlab(NULL) + ggtitle("TNFRSF14") +
+  theme(legend.position="top") +
+  geom_text_repel(data = normalizedCountsHGNC.symbol[normalizedCountsHGNC.symbol$Case==12,], aes(label = Case), size=3)+
+  stat_compare_means(method="t.test")
+
+pdf("outputs/RT_boxplots_drivers.pdf", width = 10, height = 6, useDingbats = F)
+grid.arrange(MYCN, CDKN1B, ARID4B, ARID1A, CHD2, EP300, CREBBP, TRAF3, SPEN, TNFRSF14, nrow=2)
+dev.off()
+
+grid.arrange(MYCN, CDKN1B, ARID4B, ARID1A, CHD2, EP300, CREBBP, TRAF3, SPEN, TNFRSF14, nrow=2)
+```
+
+# GSEA
+
+```{r}
+# pre-ranked gene list ordered by -log10(pvalue) x (sign of fold change)
+gsea_res <- resLFC_CLLRT2_db[!is.na(resLFC_CLLRT2_db$pvalue),]
+gsea_res$score <- -log10(gsea_res$pvalue) * ifelse(gsea_res$log2FoldChange>0, 1, -1)
+ranks <- gsea_res[,c("HGNC.symbol", "score")] 
+ranks <- ranks[order(ranks$score, decreasing = T), ]
+ranks <- setNames(ranks$score, ranks$HGNC.symbol)
+```
+
+## Hallmarks
+
+```{r}
+t2g <- read.gmt(paste0(pathToData, "MSigDB/h.all.v7.4.symbols.gmt"))
+gseaH <- GSEA(sort(ranks, decreasing = T), TERM2GENE=t2g, verbose=F, nPerm = 10000, minGSSize = min_gs_size, maxGSSize = max_gs_size, seed = T)
+gseaH_res <- gseaH@result
+rownames(gseaH_res) <- NULL
+gseaH_res <- gseaH_res[order(gseaH_res$p.adjust, decreasing = F),]
+gseaH_res <- gseaH_res[order(abs(gseaH_res$NES), decreasing = T),]
+
+write.table(gseaH_res, "outputs/RT_gsea_H.tsv", col.names = T, row.names = F, sep = "\t", quote = F)
+DT::datatable(gseaH_res[,2:10], options = list(scrollX = T, scrollY=T), rownames = F)
+```
+
+## C2.cp
+
+```{r}
+t2g <- read.gmt(paste0(pathToData, "MSigDB/c2.cp.v7.4.symbols.gmt"))
+gseaC2 <- GSEA(sort(ranks, decreasing = T), TERM2GENE=t2g, verbose=F, nPerm = 10000, minGSSize = min_gs_size, maxGSSize = max_gs_size, seed = T)
+gseaC2_res <- gseaC2@result
+rownames(gseaC2_res) <- NULL
+gseaC2_res <- gseaC2_res[order(gseaC2_res$p.adjust, decreasing = F),]
+gseaC2_res <- gseaC2_res[order(abs(gseaC2_res$NES), decreasing = T),]
+
+write.table(gseaC2_res, "outputs/RT_gsea_C2cp.tsv", col.names = T, row.names = F, sep = "\t", quote = F)
+DT::datatable(gseaC2_res[,2:10], options = list(scrollX = T, scrollY=T), rownames = F)
+```
+
+## GO
+
+```{r}
+gseGO_res <- gseGO(ranks, ont = "BP", OrgDb = org.Hs.eg.db, keyType = "SYMBOL", nPerm = 10000, minGSSize = min_gs_size, maxGSSize = max_gs_size, seed = T)
+gseGO_Sim <- clusterProfiler::simplify(gseGO_res, cutoff = 0.35)
+gseGO_SimRes <- gseGO_Sim@result
+rownames(gseGO_SimRes) <- NULL
+gseGO_SimRes <- gseGO_SimRes[order(gseGO_SimRes$p.adjust, decreasing = F),]
+gseGO_SimRes <- gseGO_SimRes[order(abs(gseGO_SimRes$NES), decreasing = T),]
+
+write.table(gseGO_SimRes, "outputs/RT_gsea_GO.tsv", col.names = T, row.names = F, sep = "\t", quote = F)
+DT::datatable(gseGO_SimRes[,1:10], options = list(scrollX = T, scrollY=T), rownames = F)
+```
+
+## Plots
+
+```{r, fig.height = 3.5, fig.width = 5}
+gsea_bp <- rbind(gseaH_res[gseaH_res$ID == "HALLMARK_E2F_TARGETS",],
+                 gseaH_res[gseaH_res$ID == "HALLMARK_G2M_CHECKPOINT",],
+                 gseaH_res[gseaH_res$ID == "HALLMARK_MYC_TARGETS_V1",],
+                 gseaH_res[gseaH_res$ID == "HALLMARK_MTORC1_SIGNALING",],
+                 gseaH_res[gseaH_res$ID == "HALLMARK_OXIDATIVE_PHOSPHORYLATION",],
+                 gseaC2_res[gseaC2_res$ID == "REACTOME_MITOCHONDRIAL_TRANSLATION",],
+                 gseaH_res[gseaH_res$ID == "HALLMARK_GLYCOLYSIS",],
+                 gseaH_res[gseaH_res$ID == "HALLMARK_REACTIVE_OXYGEN_SPECIES_PATHWAY",],
+                 gseaH_res[gseaH_res$ID == "HALLMARK_DNA_REPAIR",],
+                 gseaC2_res[gseaC2_res$ID == "PID_BCR_5PATHWAY",])
+
+gsea_bp$ID <- gsub("HALLMARK_", "", gsea_bp$ID)
+gsea_bp$ID <- gsub("OXIDATIVE_PHOSPHORYLATION", "OXPHOS", gsea_bp$ID)
+gsea_bp$ID <- gsub("REACTOME_MITOCHONDRIAL_TRANSLATION", "MITOCHONDRIAL_TRANSLATION", gsea_bp$ID)
+gsea_bp$ID <- gsub("REACTIVE_OXYGEN_SPECIES", "ROS_", gsea_bp$ID)
+gsea_bp$ID <- gsub("PID_BCR_5PATHWAY", "BCR_PATHWAY", gsea_bp$ID)
+gsea_bp$ID <- gsub("_V1", "", gsea_bp$ID)
+
+gsea_bp$ID <- gsub("_", " ", gsea_bp$ID)
+
+gsea_bp$ID <- factor(gsea_bp$ID, levels = gsea_bp$ID)
+gsea_bp$Direction <- "Up"
+gsea_bp$Direction[gsea_bp$NES<0] <- "Down"
+
+bp <- ggplot(gsea_bp,aes(x=ID, y=NES, fill=Direction)) +
+  geom_bar(stat = "identity", color="black", width = 0.75) +  
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  geom_hline(yintercept = 0) + 
+  ylab("NES") + xlab(NULL) + 
+  scale_fill_manual(values=c("#8882BA", "#EF7F6A")) + theme(legend.position = "none")
+
+pdf("outputs/RT_GSEA_bp.pdf", height = 3, width = 4, useDingbats = F)
+bp
+dev.off()
+bp
+```
+
+```{r, fig.width=4, fig.height=6}
+g1 <- gseaplot(gseaH, by = "runningScore", title = "HALLMARK_E2F_TARGETS", geneSetID = "HALLMARK_E2F_TARGETS")
+g2 <- gseaplot(gseaH, by = "runningScore", title = "HALLMARK_G2M_CHECKPOINT", geneSetID = "HALLMARK_G2M_CHECKPOINT")
+g3 <- gseaplot(gseaH, by = "runningScore", title = "HALLMARK_MYC_TARGETS_V1", geneSetID = "HALLMARK_MYC_TARGETS_V1")
+g4 <- gseaplot(gseaH, by = "runningScore", title = "HALLMARK_MYC_TARGETS_V2", geneSetID = "HALLMARK_MYC_TARGETS_V2")
+g5 <- gseaplot(gseaH, by = "runningScore", title = "HALLMARK_MTORC1_SIGNALING", geneSetID = "HALLMARK_MTORC1_SIGNALING")
+g6 <- gseaplot(gseaH, by = "runningScore", title = "HALLMARK_OXIDATIVE_PHOSPHORYLATION", geneSetID = "HALLMARK_OXIDATIVE_PHOSPHORYLATION")
+g7 <- gseaplot(gseaH, by = "runningScore", title = "HALLMARK_GLYCOLYSIS", geneSetID = "HALLMARK_GLYCOLYSIS")
+g8 <- gseaplot(gseaH, by = "runningScore", title = "HALLMARK_REACTIVE_OXYGEN_SPECIES_PATHWAY", geneSetID = "HALLMARK_REACTIVE_OXYGEN_SPECIES_PATHWAY")
+g9 <- gseaplot(gseaH, by = "runningScore", title = "HALLMARK_DNA_REPAIR", geneSetID = "HALLMARK_DNA_REPAIR")
+g10 <- gseaplot(gseaC2, geneSetID = "PID_BCR_5PATHWAY", by = "runningScore", title = "PID_BCR_5PATHWAY")
+
+pdf("outputs/RT_GSEA_enrichments_main.pdf", width = 3, height = 4, useDingbats = F)
+grid.arrange(g6,g10, nrow=2)
+dev.off()
+grid.arrange(g6,g10, nrow=2)
+```
+
+```{r, fig.width=16, fig.height=6}
+lay <- matrix(c(1,2,3,4,5,6,7,8), ncol=4)
+pdf("outputs/RT_GSEA_enrichments_supple.pdf", width = 16, height = 6, useDingbats = F)
+grid.arrange(arrangeGrob(g1,g2,g3,g4,g5,g7,g8,g9, layout_matrix = lay))
+dev.off()
+
+grid.arrange(arrangeGrob(g1,g2,g3,g4,g5,g7,g8,g9, layout_matrix = lay))
+```
+
+# Session
+
+```{r}
+sessionInfo()
+```
