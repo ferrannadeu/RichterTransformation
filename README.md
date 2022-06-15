@@ -9,7 +9,7 @@ Richter transformation (RT) is a paradigmatic evolution of chronic lymphocytic l
 
 ## Datasets
 
-- **Mutational signatures:** 
+- **Mutational signatures:** Code to perform the extraction/assignment and fitting of mutational signatures as well as the characterization of the novel SBS-RT can be found [here](https://github.com/ferrannadeu/RichterTransformation/tree/main/MutationalSignatures) 
 - **DNA methylation:** Code used to normalize DNA methylation data can be found [here](https://github.com/Duran-FerrerM/DNAmeth_arrays). Code to calculate the tumor cell content, CLL epitypes, and epiCMIT can be found [here](https://github.com/Duran-FerrerM/Pan-B-cell-methylome).
 - **ATAC-seq:**
 - **H3K27ac:**
