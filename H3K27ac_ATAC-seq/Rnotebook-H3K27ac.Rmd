@@ -1,0 +1,940 @@
+---
+title: "ChIP-seq of H3K27ac analysis"
+author: "Beatriz García Torre"
+date: "01/10/21"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: yes
+    df_print: paged
+
+
+---
+# Settings
+
+```{r include=TRUE}
+suppressPackageStartupMessages(library("docopt"))
+suppressPackageStartupMessages(library("gplots"))
+suppressPackageStartupMessages(library("stats"))
+suppressPackageStartupMessages(library("graphics"))
+suppressPackageStartupMessages(library("ggplot2"))
+suppressPackageStartupMessages(library("ggrepel"))
+suppressPackageStartupMessages(library("dplyr"))
+suppressPackageStartupMessages(library("circlize"))
+suppressPackageStartupMessages(library("tidyr"))
+suppressPackageStartupMessages(library("ComplexHeatmap"))
+suppressPackageStartupMessages(library("gridExtra"))
+suppressPackageStartupMessages(library("biomaRt"))
+suppressPackageStartupMessages(library("GenomicRanges"))
+suppressPackageStartupMessages(library("data.table"))
+suppressPackageStartupMessages(library("DT"))
+suppressPackageStartupMessages(library("BSgenome.Hsapiens.UCSC.hg38.masked"))
+
+```
+```{r include=TRUE}
+# define path
+pathToData <- "~/CLL-project/SAMPLES/H3K27ac/Bcells/"
+pathToResults <- "~/CLL-project/RESULTS/H3K27ac/Bcells/"
+```
+
+# PCA
+
+```{r include=TRUE}
+colors.path <- paste0(pathToData,"master_table_rs_study.h3k27ac.tsv")
+colors.k <- as.integer(10)
+counts.path <- paste0(pathToData,"measures/H3K27ac_consensus_coverage.cll_sequential_samples.rs_study.chr1-22.blind_norm.ComBat.filt.tsv")
+jFirstValid = as.integer(4)
+cex1 = as.numeric(8)
+cex2 = as.numeric(1)
+
+counts <- read.delim(counts.path, header = T, stringsAsFactors = F, check.names = F)
+counts <- counts[,jFirstValid:(ncol(counts))]
+counts <- counts[,-c(12:20)]
+i2Keep = which(rowSums(counts[,1] - counts[,2:(ncol(counts))]) != 0)
+counts = counts[i2Keep,]
+
+info <- read.delim(paste0(pathToData,"master_table_rs_study.h3k27ac.tsv"),
+                   header = T, stringsAsFactors = F)
+info <- info[order(info$Id_analysis),]
+info <- info[-c(12:20),]
+
+colors <- NA
+if (is.character(colors.path)) {
+  colors <- read.delim(colors.path, header = T, stringsAsFactors = F)
+  colors <- colors[order(colors$Id_analysis),]
+  colors <- colors[-c(12:20),]
+  colors.i <- match(substr(colnames(counts), 1, colors.k), 
+                    substr(colors[,2], 1, colors.k))
+  colors[which(is.na(colors.i)),2] <- "grey"
+  colors1 <- colors[colors.i, 11]
+  colors <- colors[order(colors$Id_analysis),]
+  names(colors1) = colors$IGHV
+}
+
+fill <- NA
+if (is.character(colors.path)) {
+  fill <- read.delim(colors.path, header = T, stringsAsFactors = F)
+  fill <- fill[order(fill$Id_analysis),]
+  fill <- fill[-c(12:20),]
+  fill.i <- match(substr(colnames(counts), 1, colors.k), 
+                  substr(fill[,2], 1, colors.k))
+  fill[which(is.na(fill.i)),2] <- "grey"
+  fill1 <- fill[fill.i, 10]
+  fill <- fill[order(fill$Id_analysis),]
+  names(fill1) = fill$Disease
+}
+
+
+PCA <- prcomp(t(counts), center = T, scale. = F)
+perc <- 100*(PCA$sdev^2)/sum(PCA$sdev^2)
+PCA.plot.data <- PCA$x[,1:10]
+colnames(PCA.plot.data) <- paste("PC",c(1:10), " (",round(perc[1:10], digits=1),"%)", sep="")
+
+save(PCA.plot.data, file=paste0(pathToResults,"CLL_sequential_samples_H3K27ac_RS_study.PCA.RData"))
+
+xlim.min<-min(PCA.plot.data[,1])-(max(PCA.plot.data[,1])-min(PCA.plot.data[,1]))*0.08
+xlim.max<-max(PCA.plot.data[,1])+(max(PCA.plot.data[,1])-min(PCA.plot.data[,1]))*0.08
+ylim.min<-min(PCA.plot.data[,2])-(max(PCA.plot.data[,2])-min(PCA.plot.data[,2]))*0.08
+ylim.max<-max(PCA.plot.data[,2])+(max(PCA.plot.data[,2])-min(PCA.plot.data[,2]))*0.08
+
+df <- data.frame(x = PCA.plot.data[,1], y = PCA.plot.data[,2],
+                 IGHV = colors$IGHV, Diagnosis= colors$Disease, Case = c(rep("12",3), rep("19",1), rep("3299",1), "365", "365", rep("63",3), 
+                                                                      "816"))
+df$IGHV <- factor(df$IGHV, levels = c("U-IGHV", "M-IGHV"))
+df$Diagnosis <- factor(df$Diagnosis, levels=c("CLL", "CLL-relapse", "RT"))
+
+p1 <- ggplot(df, aes(x = x, y = y,color=IGHV, fill = Diagnosis ,label=Case)) +
+  geom_point(size=3, pch=21) +
+  scale_color_manual(values = colors1)+
+  scale_fill_manual(values = fill1)+
+  geom_text_repel(data=df[1:10,],size=3.25,colour = "black", max.overlaps = 20) +
+  theme_classic() + theme(axis.ticks = element_blank(), axis.text=element_blank()) + 
+  xlab(colnames(PCA.plot.data)[1]) +
+  ylab(colnames(PCA.plot.data)[2])
+```
+
+```{r include=TRUE}
+pdf(paste0(pathToResults,"PCA-H3K27ac-CLL-RT.pdf"), width = 3.75, height = 2.75, useDingbats = F)
+p1
+dev.off()
+```
+
+```{r include=TRUE, out.width='50%', fig.align='center',fig.height = 4, fig.width = 6,out.width = "600.0in"}
+p1
+```
+
+# RT specific changes
+
+## NBC/MBC stable regions
+
+```{r include=TRUE}
+
+counts <- read.delim(paste0(pathToData,"measures/H3K27ac_consensus_coverage.cll_sequential_samples.rs_study.chr1-22.blind_norm.ComBat.filt.tsv"), head=T, stringsAsFactors = F)
+callings <- read.delim(paste0(pathToData,"H3K27ac_consensus_callings.cll_sequential_samples.rs_study.chr1-22.tsv"), head=T, stringsAsFactors = F)
+cntsLoc = counts[,c(1:3)]
+counts = counts[,c(-1:-3)]
+rownames(counts) = sprintf("%s:%d-%d", cntsLoc[,1], cntsLoc[,2], cntsLoc[,3])
+
+#select Bcells
+counts.bcells <- counts[,c(12:20)]
+
+callingsLoc = callings[,c(1:3)]
+callings = callings[,c(-1:-3)]
+rownames(callings) = sprintf("%s:%d-%d", callingsLoc[,1], callingsLoc[,2], callingsLoc[,3])
+callings <- data.frame(region=rownames(callings), callings)
+
+#NBC/MBC stable regions
+
+mean <- matrix(data=NA, nrow= nrow(counts.bcells), ncol=3)
+colnames(mean) <- c("region", "mean", "sd")
+
+for(i in 1:nrow(counts.bcells)) {
+  region <- rownames(counts.bcells[i,])
+  x <- as.numeric(counts.bcells[i,])
+  mean.x <- mean(x)
+  sd.result = sqrt(var(x))
+  mean[i,1] <- region
+  mean[i,2] <- mean.x
+  mean[i,3] <- sd.result
+}
+
+mean <- as.data.frame(mean)
+mean$mean <- as.numeric(mean$mean)
+mean$sd <- as.numeric(mean$sd)
+
+counts.matrix <- data.frame(region=row.names(counts), counts)
+counts.matrix <- merge(counts.matrix, mean, by="region")
+counts.unif.regions <- counts.matrix[counts.matrix$sd<0.8,]
+```
+
+```{r include=TRUE}
+changes <- matrix(data=NA, ncol = 4, nrow = 20)
+colnames(changes) <- c("case", "time_point", "change_type", "n_changes")
+```
+
+## Analysis case by case
+### CLL12
+```{r include=T}
+CLL12.bcell <- counts.unif.regions[,c(1:4,13:22)]
+
+sum.table <- merge(CLL12.bcell, callings, by="region")
+sum <- rowSums(sum.table[,c(15,25:33)])
+CLL12.sum <- data.frame(sum.table[,-c(15:33)], sum=sum)
+names(CLL12.sum) <- c(names(CLL12.bcell),"sum")
+rownames(CLL12.sum) <- sum.table$region
+CLL12.bcell <- CLL12.sum[CLL12.sum$sum>=1,] #remove regions without peak in any sample
+T2 <- CLL12.bcell[,2]-CLL12.bcell[,14]
+T2 <- data.frame(region=row.names(CLL12.bcell), LFC=T2, CLL12.bcell[,c(2:13)])
+increase.T2.CLL12 <- T2[T2$LFC> 1,]
+changes[1,] <- c("CLL12", "T2", "increase", nrow(increase.T2.CLL12))
+decrease.T2.CLL12 <- T2[T2$LFC< -1,]
+changes[2,] <- c("CLL12", "T2", "decrease", nrow(decrease.T2.CLL12))
+
+sum <- rowSums(sum.table[,c(16,25:32)])
+CLL12.sum <- data.frame(sum.table[,-c(15:33)], sum=sum)
+names(CLL12.sum) <- names(CLL12.bcell)
+rownames(CLL12.sum) <- sum.table$region
+CLL12.bcell <- CLL12.sum[CLL12.sum$sum>=1,] #remove regions without peak in any sample
+T3 <- CLL12.bcell[,3]-CLL12.bcell[,14]
+T3 <- data.frame(region=row.names(CLL12.bcell), LFC=T3, CLL12.bcell[,c(2:13)])
+increase.T3.CLL12 <- T3[T3$LFC> 1,]
+changes[3,] <- c("CLL12", "T3", "increase", nrow(increase.T3.CLL12))
+decrease.T3.CLL12 <- T3[T3$LFC< -1.5,]
+changes[4,] <- c("CLL12", "T3", "decrease", nrow(decrease.T3.CLL12))
+
+sum <- rowSums(sum.table[,c(17,25:33)])
+CLL12.sum <- data.frame(sum.table[,-c(15:33)], sum=sum)
+names(CLL12.sum) <- names(CLL12.bcell)
+rownames(CLL12.sum) <- sum.table$region
+CLL12.bcell <- CLL12.sum[CLL12.sum$sum>=1,]
+RT <- CLL12.bcell[,4]-CLL12.bcell[,14]
+RT <- data.frame(region=row.names(CLL12.bcell), LFC=RT, CLL12.bcell[,c(2:13)])
+increase.RT.CLL12 <- RT[RT$LFC> 1,]
+changes[5,] <- c("CLL12", "RT", "increase", nrow(increase.RT.CLL12))
+decrease.RT.CLL12 <- RT[RT$LFC< -1.5,]
+changes[6,] <- c("CLL12", "RT", "decrease", nrow(decrease.RT.CLL12))
+
+#Remove CLL signature
+RT.T2 <- anti_join(increase.RT.CLL12,increase.T2.CLL12, by="region") #regions only significant in RT.vs.Bcells
+RT.T3 <- anti_join(increase.RT.CLL12,increase.T3.CLL12, by="region")
+RT.T2.T3 <- merge(RT.T3, RT.T2, by="region")
+
+CLL12.RT.regions.increase <- data.frame(region=RT.T2.T3$region) #differential regions RT vs CLL
+CLL12.RT.regions.increase <- merge(CLL12.RT.regions.increase, CLL12.bcell, by="region")
+LFC.CLL12.T2 <- CLL12.RT.regions.increase[,4]-CLL12.RT.regions.increase[,2]
+LFC.CLL12.T2 <- data.frame(region=CLL12.RT.regions.increase$region, LFC=LFC.CLL12.T2)
+LFC.CLL12.T2 <- LFC.CLL12.T2[LFC.CLL12.T2$LFC>1,]
+LFC.CLL12.T3 <- CLL12.RT.regions.increase[,4]-CLL12.RT.regions.increase[,3]
+LFC.CLL12.T3 <- data.frame(region=CLL12.RT.regions.increase$region, LFC=LFC.CLL12.T3)
+LFC.CLL12.T3 <- LFC.CLL12.T3[LFC.CLL12.T3$LFC>1,]
+LFC.CLL12 <- merge(LFC.CLL12.T2, LFC.CLL12.T3, by="region")
+CLL12.RT.increase <- data.frame(region=LFC.CLL12$region)
+
+RT.T2 <- anti_join(decrease.RT.CLL12,decrease.T2.CLL12, by="region")
+RT.T3 <- anti_join(decrease.RT.CLL12,decrease.T3.CLL12, by="region")
+RT.T2.T3 <- merge(RT.T3, RT.T2, by="region")
+
+CLL12.RT.regions.decrease <- data.frame(region=RT.T2.T3$region)
+CLL12.RT.regions.decrease <- merge(CLL12.RT.regions.decrease, CLL12.bcell, by="region")
+
+LFC.CLL12.T2 <- CLL12.RT.regions.decrease[,4]-CLL12.RT.regions.decrease[,2]
+LFC.CLL12.T2 <- data.frame(region=CLL12.RT.regions.decrease$region, LFC=LFC.CLL12.T2)
+LFC.CLL12.T2 <- LFC.CLL12.T2[LFC.CLL12.T2$LFC< -1.5,]
+LFC.CLL12.T3 <- CLL12.RT.regions.decrease[,4]-CLL12.RT.regions.decrease[,3]
+LFC.CLL12.T3 <- data.frame(region=CLL12.RT.regions.decrease$region, LFC=LFC.CLL12.T3)
+LFC.CLL12.T3 <- LFC.CLL12.T3[LFC.CLL12.T3$LFC< -1.5,]
+LFC.CLL12 <- merge(LFC.CLL12.T2, LFC.CLL12.T3, by="region")
+CLL12.RT.decrease <- data.frame(region=LFC.CLL12$region)
+```
+
+### CLL19
+```{r include=TRUE}
+CLL19.bcell <-  counts.unif.regions[,c(1,5,13:22)]
+
+sum.table <- merge(CLL19.bcell, callings, by="region")
+sum <- rowSums(sum.table[,c(16,23:31)])
+CLL19.sum <- data.frame(sum.table[,-c(13:31)], sum=sum)
+names(CLL19.sum) <- c(names(CLL19.bcell),"sum")
+rownames(CLL19.sum) <- sum.table$region
+CLL19.bcell <- CLL19.sum[CLL19.sum$sum>=1,]
+RT <- CLL19.bcell[,2]-CLL19.bcell[,12]
+RT <- data.frame(region=row.names(CLL19.bcell), LFC=RT)
+increase.RT.CLL19 <- RT[RT$LFC> 1,]
+changes[7,] <- c("CLL19", "RT", "increase", nrow(increase.RT.CLL19))
+decrease.RT.CLL19 <- RT[RT$LFC< -1,]
+changes[8,] <- c("CLL19", "RT", "decrease", nrow(decrease.RT.CLL19))
+
+CLL19.RT.increase <- data.frame(region=increase.RT.CLL19$region)
+
+CLL19.RT.decrease <- data.frame(region=decrease.RT.CLL19$region)
+
+```
+
+### CLL365
+
+```{r include=TRUE}
+
+CLL365.bcell <- counts.unif.regions[,c(1,7:8,13:22)]
+
+sum.table <- merge(CLL365.bcell, callings, by="region")
+sum <- rowSums(sum.table[,c(18,24:32)])
+CLL365.sum <- data.frame(sum.table[,-c(14:32)], sum=sum)
+names(CLL365.sum) <- c(names(CLL365.bcell) ,"sum")
+rownames(CLL365.sum) <- sum.table$region
+CLL365.bcell <- CLL365.sum[CLL365.sum$sum>=1,]
+T1 <- CLL365.bcell[,2]-CLL365.bcell[,13]
+T1 <- data.frame(region=row.names(CLL365.bcell), LFC=T1, CLL365.bcell[,2:12])
+increase.T1.CLL365 <- T1[T1$LFC> 1,]
+changes[9,] <- c("CLL365", "T1", "increase", nrow(increase.T1.CLL365))
+decrease.T1.CLL365 <- T1[T1$LFC< -1,]
+changes[10,] <- c("CLL365", "T1", "decrease", nrow(decrease.T1.CLL365))
+
+sum <- rowSums(sum.table[,c(19,24:32)])
+CLL365.sum <- data.frame(sum.table[,-c(14:32)], sum=sum)
+names(CLL365.sum) <- c(names(CLL365.bcell))
+rownames(CLL365.sum) <- sum.table$region
+CLL365.bcell <- CLL365.sum[CLL365.sum$sum>=1,]
+RT <- CLL365.bcell[,3]-CLL365.bcell[,13]
+RT <- data.frame(region=row.names(CLL365.bcell), LFC=RT, CLL365.bcell[,2:12])
+increase.RT.CLL365 <- RT[RT$LFC> 1,]
+changes[11,] <- c("CLL365", "RT", "increase", nrow(increase.RT.CLL365))
+decrease.RT.CLL365 <- RT[RT$LFC< -1,]
+changes[12,] <- c("CLL365", "RT", "decrease", nrow(decrease.RT.CLL365))
+
+#Remove CLL signature
+CLL365.RT.regions.increase <- anti_join(increase.RT.CLL365,increase.T1.CLL365, by="region")
+CLL365.RT.regiions.increase <- data.frame(region=CLL365.RT.regions.increase$region)
+CLL365.RT.regions.increase <- merge(CLL365.RT.regions.increase, CLL365.bcell, by="region")
+LFC.CLL365.T1 <- CLL365.RT.regions.increase[,3]-CLL365.RT.regions.increase[,2]
+LFC.CLL365.T1 <- data.frame(region=CLL365.RT.regions.increase$region, LFC=LFC.CLL365.T1)
+LFC.CLL365.T1 <- LFC.CLL365.T1[LFC.CLL365.T1$LFC>1.5,]
+CLL365.RT.increase <- data.frame(region=LFC.CLL365.T1$region)
+
+
+CLL365.RT.regions.decrease <- anti_join(decrease.RT.CLL365,decrease.T1.CLL365, by="region")
+CLL365.RT.regions.decrease <- data.frame(region=CLL365.RT.regions.decrease$region)
+CLL365.RT.regions.decrease <- merge(CLL365.RT.regions.decrease, CLL365.bcell, by="region")
+LFC.CLL365.T1 <- CLL365.RT.regions.decrease[,3]-CLL365.RT.regions.decrease[,2]
+LFC.CLL365.T1 <- data.frame(region=CLL365.RT.regions.decrease$region, LFC=LFC.CLL365.T1)
+LFC.CLL365.T1 <- LFC.CLL365.T1[LFC.CLL365.T1$LFC< -1.5,]
+CLL365.RT.decrease <- data.frame(region=LFC.CLL365.T1$region)
+
+```
+
+### CLL63
+
+```{r include=TRUE}
+CLL63.bcell <- counts.unif.regions[,c(1,9:11, 13:22)]
+
+sum.table <- merge(CLL63.bcell, callings, by="region")
+sum <- rowSums(sum.table[,c(21,25:33)])
+CLL63.sum <- data.frame(sum.table[,-c(15:33)], sum=sum)
+names(CLL63.sum) <- c(names(CLL63.bcell), "sum")
+rownames(CLL63.sum) <- sum.table$region
+CLL63.bcell <- CLL63.sum[CLL63.sum$sum>=1,]
+T1 <- CLL63.bcell[,2]-CLL63.bcell[,14]
+T1 <- data.frame(region=row.names(CLL63.bcell), LFC=T1, CLL63.bcell[,2:13])
+increase.T1.CLL63 <- T1[T1$LFC> 1,]
+changes[13,] <- c("CLL63", "T1", "increase", nrow(increase.T1.CLL63))
+decrease.T1.CLL63 <- T1[T1$LFC< -1,]
+changes[14,] <- c("CLL63", "T1", "decrease", nrow(decrease.T1.CLL63))
+
+sum <- rowSums(sum.table[,c(22,25:33)])
+CLL63.sum <- data.frame(sum.table[,-c(15:33)], sum=sum)
+names(CLL63.sum) <- c(names(CLL63.bcell))
+rownames(CLL63.sum) <- sum.table$region
+CLL63.bcell <- CLL63.sum[CLL63.sum$sum>=1,]
+T2 <- CLL63.bcell[,3]-CLL63.bcell[,14]
+T2 <- data.frame(region=row.names(CLL63.bcell), LFC=T2 , CLL63.bcell[,2:13])
+increase.T2.CLL63 <- T2[T2$LFC> 1,]
+changes[15,] <- c("CLL63", "T2", "increase", nrow(increase.T2.CLL63))
+decrease.T2.CLL63 <- T2[T2$LFC< -1,]
+changes[16,] <- c("CLL63", "T2", "decrease", nrow(decrease.T2.CLL63))
+
+
+sum <- rowSums(sum.table[,c(23,25:33)])
+CLL63.sum <- data.frame(sum.table[,-c(15:33)], sum=sum)
+names(CLL63.sum) <- c(names(CLL63.bcell))
+rownames(CLL63.sum) <- sum.table$region
+CLL63.bcell <- CLL63.sum[CLL63.sum$sum>=1,]
+RT <- CLL63.bcell[,4]-CLL63.bcell[,14]
+RT <- data.frame(region=row.names(CLL63.bcell), LFC=RT , CLL63.bcell[,2:13])
+increase.RT.CLL63 <- RT[RT$LFC> 1,]
+changes[17,] <- c("CLL63", "RT", "increase", nrow(increase.RT.CLL63))
+decrease.RT.CLL63 <- RT[RT$LFC< -1,]
+changes[18,] <- c("CLL63", "RT", "decrease", nrow(decrease.RT.CLL63))
+
+#Remove CLL signature
+
+RT.T1 <- anti_join(increase.RT.CLL63,increase.T1.CLL63, by="region")
+RT.T2 <- anti_join(increase.RT.CLL63,increase.T2.CLL63,by="region")
+
+CLL63.RT.regions.increase <- merge(RT.T1, RT.T2, by="region")
+CLL63.RT.regions.increase <- data.frame(region=CLL63.RT.regions.increase$region)
+CLL63.RT.regions.increase <- merge(CLL63.RT.regions.increase, CLL63.bcell, by="region")
+LFC.CLL63.T1 <- CLL63.RT.regions.increase[,4]-CLL63.RT.regions.increase[,2]
+LFC.CLL63.T1 <- data.frame(region=CLL63.RT.regions.increase$region, LFC=LFC.CLL63.T1)
+LFC.CLL63.T1 <- LFC.CLL63.T1[LFC.CLL63.T1$LFC>1.5,]
+LFC.CLL63.T2 <- CLL63.RT.regions.increase[,4]-CLL63.RT.regions.increase[,3]
+LFC.CLL63.T2 <- data.frame(region=CLL63.RT.regions.increase$region, LFC=LFC.CLL63.T2)
+LFC.CLL63.T2 <- LFC.CLL63.T2[LFC.CLL63.T2$LFC>1.5,]
+LFC.CLL63 <- merge(LFC.CLL63.T1, LFC.CLL63.T2, by="region")
+CLL63.RT.increase <- data.frame(region=LFC.CLL63$region)
+
+RT.T1 <- anti_join(decrease.RT.CLL63,decrease.T1.CLL63, by="region")
+RT.T2 <- anti_join(decrease.RT.CLL63,decrease.T2.CLL63,by="region")
+CLL63.RT.unique.decrease <- merge(RT.T1, RT.T2, by="region")
+CLL63.RT.unique.decrease <- data.frame(region=CLL63.RT.unique.decrease$region)
+CLL63.RT.unique.decrease <- merge(CLL63.RT.unique.decrease, CLL63.bcell, by="region")
+LFC.CLL63.T1 <- CLL63.RT.unique.decrease[,4]-CLL63.RT.unique.decrease[,2]
+LFC.CLL63.T1 <- data.frame(region=CLL63.RT.unique.decrease$region, LFC=LFC.CLL63.T1)
+LFC.CLL63.T1 <- LFC.CLL63.T1[LFC.CLL63.T1$LFC< -1.5,]
+LFC.CLL63.T2 <- CLL63.RT.unique.decrease[,4]-CLL63.RT.unique.decrease[,3]
+LFC.CLL63.T2 <- data.frame(region=CLL63.RT.unique.decrease$region, LFC=LFC.CLL63.T2)
+LFC.CLL63.T2 <- LFC.CLL63.T2[LFC.CLL63.T2$LFC< -1.5,]
+LFC.CLL63 <- merge(LFC.CLL63.T1, LFC.CLL63.T2, by="region")
+CLL63.RT.decrease <- data.frame(region=LFC.CLL63$region)
+
+```
+
+### CLL816
+
+```{r include=TRUE}
+CLL816.bcell <- counts.unif.regions[,c(1,12:22)]
+
+sum.table <- merge(CLL816.bcell, callings, by="region")
+sum <- rowSums(sum.table[,c(22:31)])
+CLL816.sum <- data.frame(sum.table[,-c(13:31)], sum=sum)
+names(CLL816.sum) <- c(names(CLL816.bcell),"sum")
+rownames(CLL816.sum) <- sum.table$region
+CLL816.bcell <- CLL816.sum[CLL816.sum$sum>=1,]
+RT <- CLL816.bcell[,2]-CLL816.bcell[,12]
+RT <- data.frame(region=row.names(CLL816.bcell), LFC=RT)
+increase.RT.CLL816 <- RT[RT$LFC> 1,]
+changes[19,] <- c("CLL816", "RT", "increase", nrow(increase.RT.CLL816))
+decrease.RT.CLL816 <- RT[RT$LFC< -1,]
+changes[20,] <- c("CLL816", "RT", "decrease", nrow(decrease.RT.CLL816))
+
+CLL816.RT.regions.increase <- data.frame(region=increase.RT.CLL816$region)
+CLL816.RT.increase <- data.frame(region=CLL816.RT.regions.increase$region)
+
+
+CLL816.RT.regions.decrease <- data.frame(region=decrease.RT.CLL816$region)
+CLL816.RT.decrease <- data.frame(region=CLL816.RT.regions.decrease$region)
+```
+
+## Total changes
+```{r include=TRUE}
+DT::datatable(as.data.frame(changes))
+```
+## Common regions
+
+```{r include=TRUE}
+
+all.RT.increase <- rbind(CLL12.RT.increase, CLL19.RT.increase, CLL816.RT.increase,
+                         CLL365.RT.increase, CLL63.RT.increase)
+table1 <- table(all.RT.increase)
+table <- as.data.frame(table1)
+table3 <- table[table$Freq==3,]
+table4 <- table[table$Freq==4,]
+
+table <- rbind(table3,table4) #differential regions in at least 3 RT samples
+names(table) <- c("region", "freq")
+table <- table[!duplicated(table$region),]
+
+regions.increase <- separate(table, region, into=c("chr","region"), sep=":")
+regions.increase <- separate(regions.increase, region, into=c("start","end"), sep="-")
+write.table(regions.increase, paste0(pathToResults,"regions-RT-H3K27ac-increase.tsv"), col.names = T, row.names = F, quote = F, sep="\t")
+```
+
+```{r include=FALSE}
+table <- read.table("/home/bea/CLL-project/SAMPLES/regions-H3K27ac.txt", head=T, stringsAsFactors = F)
+table <- table[table$Direction.H3K27ac=="Increase", ]
+regions.increase <- table[, 1:4]
+table <- data.frame(region=paste0(table$chr,":", table$start, "-",table$end), freq=table$Number_of_cases)
+```
+
+```{r include=TRUE}
+DT::datatable(regions.increase)
+```
+
+```{r include=TRUE}
+counts.table <- merge(table, counts.matrix, by="region")
+row.names(counts.table) <- counts.table$region
+counts.table <- counts.table[order(counts.table$freq),c(14:15,22,16:21,3,10,8,4,11,6,5,12,9,13,2)]
+common.regions.increase <- data.frame(region=rownames(counts.table), counts.table)
+
+ha = HeatmapAnnotation(
+  Sample = c(rep("csMBC",2), rep("ncsMBC",1),rep("NBCB",3), rep("NBCT",3),  rep("CLL",3), rep("CLL-relapse",2), rep("RT",5)),
+  
+  IGHV= c(rep("NA",9),"U-IGHV", "U-IGHV","M-IGHV",rep("U-IGHV",2),"M-IGHV",rep("U-IGHV",2),"M-IGHV", "U-IGHV"),
+  Tissue = c(rep("Peripheral blood",11), "Lymph node","Peripheral blood","Lymph node", rep("Peripheral blood",2), rep("Lymph node",3) ),
+  col = list(Sample = c("CLL"="#EDEDED","RT" = "#CE899A", "CLL-relapse" = "#5E5E5E", "csMBC"="blue", "ncsMBC"="darkblue", "NBCT"="seagreen3", "NBCB"="palegreen"),
+             IGHV = c("M-IGHV"="#010101", "U-IGHV"="#B4B4B4","NA"="#FFFFFF"),
+             Tissue = c("Peripheral blood" = "#FFDBB8", "Lymph node"="#CAF9E2")
+  ),
+  border = T
+)
+
+col = colorRamp2(c(-3, 0, 3), c("#0B652E", "white", "#F6A318")) 
+
+common.regions.increase <- Heatmap(matrix = t(scale(t(as.matrix(counts.table[,1:19])))),
+                          row_title_gp = gpar(cex=0.1),
+                          top_annotation = ha,
+                          col=col,
+                          row_split = counts.table$freq,
+                          row_title_rot = 0,
+                          show_row_dend = T,
+                          show_column_dend = F,
+                          show_column_names = T,
+                          cluster_row_slices = F,
+                          cluster_columns = F,
+                          cluster_rows = F,
+                          cluster_column_slices = F,
+                          show_row_names = F,
+                          border = T,gap = unit(0,"mm"),
+                          width = unit(14, "cm"),
+                          column_title = paste0("Increase in RT n=", nrow(counts.table)),
+                          name = "z-score"
+                          
+)
+pdf(paste0(pathToResults,"increase_common_regions_heatmap.pdf"), width = 8, height = 6, useDingbats = F)
+draw(common.regions.increase)
+dev.off()
+
+```
+
+```{r include=TRUE, fig.align = "center", fig.height = 6, fig.width = 8,out.width = "800.0in"}
+common.regions.increase
+```
+
+```{r include=TRUE}
+all.RT.decrease <- rbind(CLL12.RT.decrease, CLL19.RT.decrease, CLL816.RT.decrease, 
+                         CLL365.RT.decrease, CLL63.RT.decrease)
+table1 <- table(all.RT.decrease)
+table <- as.data.frame(table1)
+table3 <- table[table$Freq==3,]
+table4 <- table[table$Freq==4,]
+
+table <- rbind(table3,table4)
+names(table) <- c("region", "freq")
+table <- table[!duplicated(table$region),]
+
+regions.decrease <- separate(table, region, into=c("chr","region"), sep=":")
+regions.decrease <- separate(regions.decrease, region, into=c("start","end"), sep="-")
+write.table(regions.decrease, paste0(pathToResults,"regions-RT-H3K27ac-decrease.tsv"), col.names = T, row.names = F, quote = F, sep="\t")
+```
+
+```{r include=FALSE}
+table <- read.table("/home/bea/CLL-project/SAMPLES/regions-H3K27ac.txt", head=T, stringsAsFactors = F)
+table <- table[table$Direction.H3K27ac=="Decrease", ]
+regions.decrease <- table[, 1:4]
+table <- data.frame(region=paste0(table$chr,":", table$start, "-",table$end), freq=table$Number_of_cases)
+```
+
+```{r include=TRUE}
+DT::datatable(regions.decrease)
+```
+
+```{r include=TRUE}
+counts.table <- merge(table, counts.matrix, by="region")
+row.names(counts.table) <- counts.table$region
+counts.table <- counts.table[order(counts.table$freq),c(14:15,22,16:21,3,10,8,4,11,6,5,12,9,13,2)]
+common.regions.decrease <- data.frame(region=rownames(counts.table), counts.table)
+
+common.regions.decrease <- Heatmap(matrix = t(scale(t(as.matrix(counts.table[,1:19])))),
+                          row_title_gp = gpar(cex=0.1),
+                          col=col,
+                          top_annotation = ha,
+                          row_split = counts.table$freq,
+                          row_title_rot = 0,
+                          show_row_dend = T,
+                          show_column_dend = F,
+                          show_column_names = T,
+                          cluster_row_slices = F,
+                          cluster_columns = F,
+                          cluster_rows = F,
+                          cluster_column_slices = F,
+                          show_row_names = F,
+                          border = T,gap = unit(0,"mm"),
+                          width = unit(14, "cm"),
+                          column_title = paste0("Decrease in RT n=", nrow(counts.table)),
+                          name = "z-score"
+                          
+)
+pdf(paste0(pathToResults,"decrease_common_regions_heatmap.pdf"), width = 8, height = 6, useDingbats = F)
+draw(common.regions.decrease)
+dev.off()
+```
+```{r include=TRUE, fig.align = "center",fig.height = 6, fig.width = 8,out.width = "800.0in"}
+common.regions.decrease
+```
+
+# Gene annotation
+
+```{r include=TRUE}
+
+RNA.seq.genes <- fread(paste0(pathToData,"genes-RNA-seq"),data.table = F)
+```
+```{r include=FALSE}
+DT::datatable(RNA.seq.genes)
+```
+```{r include=TRUE}
+ensembl <- useMart(biomart = "ensembl",dataset="hsapiens_gene_ensembl")
+Datasets <- listDatasets(ensembl)
+Datasets[grep("hsapiens_gene_ensembl",Datasets$dataset),]
+
+##retrieve directly gene annotation
+genes.hg38.annot <- select(x = ensembl,keys = RNA.seq.genes$HGNC.symbol,keytype = "hgnc_symbol",
+                              columns = c("hgnc_symbol","entrezgene_id","chromosome_name","start_position","end_position","strand","band","gene_biotype")
+)
+genes.hg38.annot <- genes.hg38.annot[which(genes.hg38.annot$chromosome_name%in%c(paste0(1:22),"X","Y")),]
+genes.hg38.annot$chromosome_name <- paste0("chr",genes.hg38.annot$chromosome_name)
+genes.hg38.annot.GR <- GRanges(seqnames = genes.hg38.annot$chromosome_name,
+                                  ranges = IRanges(start = genes.hg38.annot$start_position,
+                                                   end = genes.hg38.annot$end_position),
+                                  strand = genes.hg38.annot$strand
+)
+mcols(genes.hg38.annot.GR) <- genes.hg38.annot[,c("hgnc_symbol","entrezgene_id","band","gene_biotype")]
+genes.hg38.annot.GR <- sort(sortSeqlevels(genes.hg38.annot.GR[!duplicated(genes.hg38.annot.GR)],))
+genes.hg38.annot.GR <- sort(sortSeqlevels(genes.hg38.annot.GR))
+
+## Extend promoters 2000bp upstream considering strand specificities
+genes.hg38.annot.GR.2000 <- punion(promoters(genes.hg38.annot.GR,upstream = 2000,downstream = 0,use.names = T),
+                                      genes.hg38.annot.GR
+)
+mcols(genes.hg38.annot.GR.2000) <- mcols(genes.hg38.annot.GR)
+colnames(mcols(genes.hg38.annot.GR.2000)) <- paste0("Gene.",colnames(mcols(genes.hg38.annot.GR.2000)))
+
+## Add annotation for enhancers defined in Beekman et. al 2018
+
+HiC.GM.GR <- fread(paste0(pathToData,"TADs_GM12878_GRCh38.txt"),data.table = F,
+                   col.names = c("chr","start","end","TAD"))
+```
+
+```{r include=FALSE}
+DT::datatable(HiC.GM.GR)
+```
+
+```{r include=TRUE}
+## Overlapping leading genes regions vs distal enhacers based on HiC
+
+HiC.GM.GR <- makeGRangesFromDataFrame(HiC.GM.GR, keep.extra.columns = T)
+overlaps <- findOverlaps(genes.hg38.annot.GR.2000, HiC.GM.GR)
+
+genes.hg38.annot.GR.2000.TADs.GM <- genes.hg38.annot.GR.2000[queryHits(overlaps)]
+HiC.GM.GR.dat <- DataFrame(HiC.GM.GR[subjectHits(overlaps)])
+colnames(HiC.GM.GR.dat) <- c("TAD.GM12878","TAD.num")
+mcols(genes.hg38.annot.GR.2000.TADs.GM) <- cbind(mcols(genes.hg38.annot.GR.2000.TADs.GM),
+                                                    HiC.GM.GR.dat
+)
+
+genes.hg38.annot.GR.2000.TADs.GM.dat <- as.data.frame(genes.hg38.annot.GR.2000.TADs.GM)
+colnames(genes.hg38.annot.GR.2000.TADs.GM.dat)[1:5] <- paste0("Gene.",colnames(genes.hg38.annot.GR.2000.TADs.GM.dat)[1:5])
+genes.hg38.annot.GR.2000.TADs.GM.dat$Gene.indx <- queryHits(overlaps)
+genes.hg38.annot.GR.2000.TADs.GM.dat$TAD.GM12878.indx <- subjectHits(overlaps)
+
+#RT specific regions
+regions <- regions.decrease
+regions <- regions[,1:3]
+regions.down <- data.frame(regions,type=rep("down", length(regions$start)), regions)
+names(regions.down) <- c("seqnames", "start", "end", "H3K27ac", "chr.H3K27ac", "start.H3K27ac", "end.H3K27ac")
+
+regions <- regions.increase
+regions <- regions[,1:3]
+regions.up <- data.frame(regions,type=rep("up", length(regions$start)), regions)
+names(regions.up) <- c("seqnames", "start", "end", "H3K27ac", "chr.H3K27ac", "start.H3K27ac", "end.H3K27ac")
+
+regions <- rbind(regions.up, regions.down)
+
+#Genes+promoter
+
+regions.GR <- GRanges(regions)
+gene.promoter <- genes.hg38.annot.GR.2000.TADs.GM.dat[,1:6]
+names(gene.promoter) <- c("seqnames","start", "end", "width", "strand", "HGNC.symbol")
+gene.promoter.GR <- GRanges(gene.promoter)
+
+genes <- findOverlaps(gene.promoter.GR, regions.GR)
+
+gr1.matched <- gene.promoter.GR[queryHits(genes)]
+
+# Add the metadata from H3K27ac regions
+mcols(gr1.matched) <- cbind.data.frame(
+  mcols(gr1.matched),
+  mcols(regions.GR[subjectHits(genes)]))
+
+genes <- as.data.frame(gr1.matched)
+
+#Overlap TADs
+
+regions.GR <- GRanges(regions)
+gene.tad <- genes.hg38.annot.GR.2000.TADs.GM.dat[,c(10:12,14,16,6)]
+names(gene.tad) <- c("seqnames","start", "end", "strand", "TAD.num","HGNC.symbol")
+gene.tad.GR <- GRanges(gene.tad)
+
+genes.tad <- findOverlaps(gene.tad.GR, regions.GR)
+gr1.matched <- gene.promoter.GR[queryHits(genes.tad)]
+
+# Add the metadata from H3K27ac regions
+mcols(gr1.matched) <- cbind.data.frame(
+  mcols(gr1.matched),
+  mcols(regions.GR[subjectHits(genes.tad)]))
+
+genes.tad <- as.data.frame(gr1.matched)
+
+genes <- data.frame(genes, overlap=rep("promoter+gene",length(genes$seqnames)))
+genes.tad <- data.frame(genes.tad, overlap=rep("tad",length(genes.tad$seqnames)))
+genes <- rbind(genes, genes.tad)
+
+genes <- merge(genes, RNA.seq.genes, by="HGNC.symbol")
+
+```
+
+```{r include=FALSE}
+ genes <- read.table("/home/bea/CLL-project/SAMPLES/genes-H3K27ac.txt", head=T, stringsAsFactors = F)
+```
+ 
+```{r include=TRUE}
+DT::datatable(genes)
+```
+
+# Transcription factor analysis
+
+## Analysis with MEME suite
+
+```{r include=TRUE}
+ATAC.peaks <- read.table(paste0(pathToData,"ATAC_consensus_callings.cll_sequential_samples.rs_study.chr1-22.tsv"), 
+                         head=T, stringsAsFactors = F)
+ATAC.peaks <- ATAC.peaks[,c(1:3,7,10,13,15,18)]
+ATAC.peaks.sum <- data.frame(ATAC.peaks[,1:3], sum=rowSums(ATAC.peaks[,4:8]))
+ATAC.peaks <- ATAC.peaks.sum[ATAC.peaks.sum$sum>=2,] # Accessible regions in at least 2 RT samples
+ATAC.peaks.GR <- makeGRangesFromDataFrame(ATAC.peaks)
+regions.increase.GR <- makeGRangesFromDataFrame(regions.increase)
+
+regions.TF.analysis <- subsetByOverlaps(regions.increase.GR, ATAC.peaks.GR)
+regions.TF.analysis <- as.data.frame(regions.TF.analysis)
+
+#Input files for MEME suite
+
+fg.file <- regions.TF.analysis
+out <- paste0(pathToResults,"TF-analysis/ATAC-peaks.txt")
+write.table(fg.file, out , col.names = T, row.names=F, quote = F, sep="\t")
+
+fg <- GRanges(regions.TF.analysis)
+start(fg) <- start(fg) + 1
+fgSeq <- getSeq(BSgenome.Hsapiens.UCSC.hg38.masked, fg)
+names(fgSeq) <- sprintf("%s:%d-%d", seqnames(fg), start(fg), end(fg))
+fgFasta <- sprintf("%s/%s.fasta", paste0(pathToResults,"TF-analysis"), "sequence-ATAC-peaks")
+writeXStringSet(fgSeq, fgFasta)
+
+background <- read.table(paste0(pathToData,"ATAC_consensus_callings.cll_sequential_samples.rs_study.chr1-22.tsv"),
+                         head=T, stringsAsFactors = F)
+bg <- GRanges(background)
+start(bg) <- start(bg) + 1
+write.table(as.data.frame(bg), paste0(pathToResults,"TF-analysis/background-regions.txt"), quote = F, col.names = T, row.names = F)
+bgSeq <- getSeq(BSgenome.Hsapiens.UCSC.hg38.masked, bg)
+names(bgSeq) <- sprintf("%s:%d-%d", seqnames(bg), start(bg) - 1, end(bg))
+bgFasta <- paste0(pathToResults,"TF-analysis/bg-file-all-consensus.fasta")
+writeXStringSet(bgSeq, bgFasta)
+```
+
+Run AME/MEME suite in command line:
+
+ame --verbose 1 --oc ~/CLL-project/RESULTS/H3K27ac/Bcells/TF-analysis --control ~/CLL-project/RESULTS/H3K27ac/Bcells/TF-analysis/bg-file-all-consensus.fasta --scoring max --method ranksum ~/CLL-project/RESULTS/H3K27ac/Bcells/TF-analysis/sequence-ATAC-peaks.fasta ~/CLL-project/SAMPLES/H3K27ac/Bcells/JASPAR2020_CORE_human.meme
+
+```{r include=TRUE}
+ame.results <- read.table(paste0(pathToResults,"TF-analysis/ame.tsv"), head=T, stringsAsFactors = F)
+DT::datatable(ame.results)
+```
+
+```{r include=TRUE}
+geneID <- data.frame(ID=ame.results[,3])
+output <-paste0(pathToResults,"TF-analysis/motif-ID.txt")
+write.table(geneID, output, quote = F, col.names = F, row.names = F)
+```
+
+Run FIMO/MEME suite in command line:
+
+sed ~/CLL-project/RESULTS/H3K27ac/Bcells/TF-analysis/motif-ID.txt
+ 
+for f in ~/CLL-project/RESULTS/H3K27ac/Bcells/TF-analysis/sequence-ATAC-peaks.fasta; do fasta-get-markov \$f > $f.txt ; done
+
+filename= "~/CLL-project/RESULTS/H3K27ac/Bcells/TF-analysis/motif-ID.txt"
+
+while read -r line; do
+   name="$line"
+	for fl in ~/CLL-project/RESULTS/H3K27ac/Bcells/TF-analysis/sequence-ATAC-peaks.fasta; do fimo -bgfile \$fl.txt --max-stored-scores 10000000 -oc ~/CLL-project/RESULTS/H3K27ac/Bcells/TF-analysis/Results-fimo/\$name --parse-genomic-coord ~/TF-JASPAR-2020/JASPAR2020_CORE_vertebrates_non-redundant_pfms_meme/\$name.meme $fl;done
+
+done < "$filename"
+
+## Percentage of sequence with binding motifs
+
+### RT
+
+```{r include=TRUE}
+perc <- matrix(NA, ncol=1, nrow=length(geneID$ID))
+
+for(i in 1:length(geneID$ID)){
+  
+  file.matrix <- as.character(geneID[i,1])
+  
+  TF <- paste0(pathToResults, "TF-analysis/Results-fimo/",file.matrix, "/fimo.tsv")
+  TF <- read.csv(TF, sep="\t", head=T, stringsAsFactors = F)
+  
+  if (length(TF)>1){
+  ATAC <- read.table(paste0(pathToResults,"TF-analysis/ATAC-peaks.txt"), head = T, stringsAsFactors = F)
+  
+  TF <- TF[,3:5]
+  names(TF) <- c("seqnames", "start", "end")
+  TF <- na.omit(TF)
+  TF <- GRanges(TF)
+  start(TF) <- start(TF)+1
+  
+  ATAC <- ATAC[,1:3]
+  
+  ATAC <- GRanges(ATAC)
+  start(ATAC) <- start(ATAC)+1
+  
+  ATAC.MOTIFS <- subsetByOverlaps(ATAC,TF)
+  
+  value <- length(ATAC.MOTIFS)/length(ATAC)*100
+  perc[i,1] <- value
+  }
+  else{
+    perc[i,1] <- 0
+  }
+}
+
+perc <- as.data.frame(perc)
+names(perc) <- c("%") 
+ame.results.RT <- cbind(geneID, perc)
+names(ame.results.RT) <- c("motif_ID", "perc")
+```
+
+### CLL
+
+```{r include=TRUE}
+CLL.TF <- read.table(paste0(pathToResults,"TF-analysis/CLL/ame.tsv"), head=T, stringsAsFactors = F)
+geneID <- data.frame(ID=CLL.TF[,3])
+perc <- matrix(NA, ncol=1, nrow=length(geneID$ID))
+
+for(i in 1:length(geneID$ID)){
+  
+  file.matrix <- as.character(geneID[i,1])
+  
+  TF <- paste0(pathToResults,"TF-analysis/CLL/Results-fimo/",file.matrix, "/fimo.tsv")
+  TF <- read.csv(TF, sep="\t", head=T, stringsAsFactors = F)
+  
+  if (length(TF)>1){
+  ATAC <- read.table(paste0(pathToResults,"TF-analysis/CLL/ATAC-peaks.txt"), head = T, stringsAsFactors = F)
+  ATAC <- ATAC[,1:3]
+  
+  TF <- TF[,3:5]
+  names(TF) <- c("seqnames", "start", "end")
+  TF <- na.omit(TF)
+  TF <- GRanges(TF)
+  start(TF) <- start(TF)+1
+  
+  ATAC <- ATAC[,1:3]
+  
+  ATAC <- GRanges(ATAC)
+  start(ATAC) <- start(ATAC)+1
+  
+  ATAC.MOTIFS <- subsetByOverlaps(ATAC,TF)
+  
+  value <- length(ATAC.MOTIFS)/length(ATAC)*100
+  perc[i,1] <- value
+  }
+  else{
+    perc[i,1] <- 0
+  }
+}
+
+perc <- as.data.frame(perc)
+names(perc) <- c("%") 
+ame.results.CLL <- cbind(geneID, perc)
+names(ame.results.CLL) <- c("motif_ID", "perc")
+```
+### Percentage difference
+
+```{r include=TRUE}
+perc <- merge(ame.results.RT, ame.results.CLL, by="motif_ID")
+diff <- perc[,2]-perc[,3]
+perc <- data.frame(perc, diff.perc= diff)
+names(perc) <- c("motif_ID", "perc.RT", "perc.CLL", "diff.perc")
+```
+
+### Table creation
+
+```{r include=TRUE}
+table <- perc
+ame.results.RT <- read.table(paste0(pathToResults,"TF-analysis/ame.tsv"), head=T, stringsAsFactors = F)
+ame.results.CLL <- read.table(paste0(pathToResults,"TF-analysis/CLL/ame.tsv"), head=T, stringsAsFactors = F)
+
+table <- merge(table, ame.results.RT, by="motif_ID")
+table <- table[,c(1,7,2:4,9)]
+names(table) <- c("motif_ID", "gene", "perc.RT", "perc.CLL", "diff.perc", "pval.RT.AME")
+table <- merge(table, ame.results.CLL, by="motif_ID")
+table <- table[,c(1:6,11)]
+names(table) <- c("motif_ID", "gene", "perc.RT", "perc.CLL", "diff.perc", "pval.RT.AME", "pvale.CLL.AME")
+table <- table[order(table$gene),]
+
+#Expression data
+
+rna <- read.delim(paste0(pathToData,"normalizedCounts_HGNCsymbol.tsv"), head=T, stringsAsFactors = F)
+rna <- as.data.frame(t(as.matrix(rna)))
+names(rna) <- c("63.CLL", "63.RT", "365.CLL", "365.RT", "3299.CLL", "3299.RT", "19.CLL", "19.RT","12.CLL", "12.RT", "816.CLL", "816.RT")
+rna <- rna[-c(1:5),]
+rna <- data.frame(gene=rownames(rna),rna)
+rna.tf <- merge(table, rna, by="gene")
+
+exp <- matrix(data=NA, nrow = length(rna.tf$gene), ncol=2)
+rownames(exp) <- rna.tf$gene
+colnames(exp) <- c("CLL.exp", "RT.exp")
+
+for (i in 1:nrow(rna.tf)) {
+  gene_name = as.character(rna.tf[i,1])
+  gene <- na.omit(rna.tf[i,8:19])
+  gene <- data.frame(exp=as.numeric(gene))
+  CLL <- median(gene[c(1,3,5,7,9,11),])
+  exp[i,1] <- CLL
+  
+  RT <- median(gene[c(2,4,6,8,10,12),])
+  exp[i,2] <- RT
+}
+
+exp <- as.data.frame(exp)
+exp <- data.frame(gene=rownames(exp), exp)
+
+table <- merge(table, exp, by="gene")
+names(table) <- c("HGNC.symbol", "motif_ID", "perc.RT", "perc.CLL", "diff.perc", "pval.RT.AME", "pvale.CLL.AME", "CLL.exp(median)", "RT.exp(median)")
+
+results.rna <- read.table(paste0(pathToData,"genes-RNA-seq"), head=T, stringsAsFactors = F)
+table <- merge(table, results.rna, by="HGNC.symbol")
+table <- table[,c(1:9,12,14,15)]
+names(table) <- c("gene", "motif_ID", "perc.RT", "perc.CLL", "diff.perc", "pval.RT.AME", "pvale.CLL.AME", "CLL.exp(median)", "RT.exp(median)", "log2FC.exp", "pval.exp", "padj.exp")
+table <- table[order(table$diff.perc,decreasing = TRUE),]
+
+```
+
+```{r include=TRUE}
+DT::datatable(table)
+```
+
+## TF RT-related
+
+```{r include=TRUE}
+table <- table[table$diff.perc>=10,]
+table <- table[table$log2FC.exp>0,]
+table <- table[table$padj.exp<0.01,]
+```
+
+```{r include=TRUE}
+DT::datatable(table)
+```
+ 
+# Session information
+```{r include=TRUE}
+sessionInfo()
+```
