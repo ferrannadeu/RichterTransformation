@@ -7,12 +7,15 @@ This repository contains scripts, notebooks, and data accompanying the study "Ea
 Richter transformation (RT) is a paradigmatic evolution of chronic lymphocytic leukemia (CLL) into a very aggressive large B-cell lymphoma conferring a dismal prognosis. The mechanisms driving RT remain largely unknown. We have characterized the whole genome, epigenome and transcriptome, combined with single-cell DNA/RNA sequencing analyses and functional experiments, of 19 CLL developing RT. Studying 54 longitudinal samples covering up to 19 years of disease course, we uncovered minute subclones carrying genomic, immunogenetic, and transcriptomic features of RT-cells already at CLL diagnosis, which were dormant for up to 19 years before transformation. We also identified new driver alterations, discovered a novel mutational signature (SBS-RT), recognized an oxidative phosphorylation (OXPHOS)<sup>high</sup>-B-cell receptor signaling (BCR)<sup>low</sup> transcriptional axis in RT, and showed that OXPHOS inhibition reduces the proliferation of RT cells. These findings demonstrate the early seeding of subclones driving advanced stages of cancer evolution and uncover therapeutic targets for the, once expanded, lethal RT.
 
 
-## Datasets
+## Analyses
 
-- **Mutational signatures:** Code to perform the extraction/assignment and fitting of mutational signatures as well as the characterization of the novel SBS-RT can be found [here](https://github.com/ferrannadeu/RichterTransformation/tree/main/MutationalSignatures) 
+- **Mutational signatures:** Code to reproduce the extraction/assignment and fitting of mutational signatures as well as the characterization of the novel SBS-RT can be found [here](https://github.com/ferrannadeu/RichterTransformation/tree/main/MutationalSignatures) 
 - **DNA methylation:** Code used to normalize DNA methylation data can be found [here](https://github.com/Duran-FerrerM/DNAmeth_arrays). Code to calculate the tumor cell content, CLL epitypes, and epiCMIT can be found [here](https://github.com/Duran-FerrerM/Pan-B-cell-methylome).
-- **ATAC-seq:**
-- **H3K27ac:**
-- **Bulk RNA-seq:** R script and input files to reproduce our bulk RNA-seq analyses can be found [here](https://github.com/ferrannadeu/RichterTransformation/tree/main/bulkRNA-seq)
-- **Single-cell RNA-seq:** All scripts, notebooks and reports to reproduce the scRNA-seq analyses can be found [here](https://github.com/massonix/richter_transformation).
+- **H3K27ac and ATAC-seq:** Code to reproduce H3K27ac and ATAC-seq analyses can be found [here](https://github.com/ferrannadeu/RichterTransformation/tree/main/H3K27ac_ATAC-seq)
+- **Bulk RNA-seq:** Code to reproduce bulk RNA-seq analyses can be found [here](https://github.com/ferrannadeu/RichterTransformation/tree/main/bulkRNA-seq)
+- **Single-cell RNA-seq:** Code to reproduce scRNA-seq analyses can be found [here](https://github.com/massonix/richter_transformation).
 
+
+## Contributors
+
+Ferran Nadeu, Romina Royo, Ramon Massoni-Badosa, Beatriz Garcia-Torre, Martí Duran-Ferrer.
