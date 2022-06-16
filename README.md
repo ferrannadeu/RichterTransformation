@@ -1,6 +1,6 @@
 # Early seeding of future Richter transformation in chronic lymphocytic leukemia - Repository
 
-This repository contains scripts, notebooks, and data accompanying the study "Early seeding of future Richter transformation in chronic lymphocytic leukemia" (Nadeu, Royo, Massoni-Badosa, Playa-Albinyana, Garcia-Torre, et al. 2022).
+This repository contains code and data accompanying the study "Early seeding of future Richter transformation in chronic lymphocytic leukemia" (Nadeu, Royo, Massoni-Badosa, Playa-Albinyana, Garcia-Torre, et al. 2022).
 
 ## Abstract
 
